@@ -52,11 +52,27 @@ export const AuthProvider = ({ children }) => {
       const state = urlParams.get('state');
 
       if (code && state) {
+        // Check if we're already processing this code
+        const processingKey = `processing_${code}`;
+        if (sessionStorage.getItem(processingKey)) {
+          console.log('Auth code already being processed, skipping...');
+          setLoading(false);
+          return;
+        }
+
+        // Mark this code as being processed
+        sessionStorage.setItem(processingKey, 'true');
+        
         console.log('Auth code detected, exchanging via backend');
-        // Exchange code for token via backend
-        await handleOAuthCallback(code, state);
-        // Clean up URL
-        window.history.replaceState({}, document.title, window.location.pathname);
+        
+        try {
+          // Exchange code for token via backend
+          await handleOAuthCallback(code, state);
+        } finally {
+          // Clean up processing flag and URL
+          sessionStorage.removeItem(processingKey);
+          window.history.replaceState({}, document.title, window.location.pathname);
+        }
       } else if (token) {
         // Validate existing token
         await validateToken();
@@ -103,8 +119,17 @@ export const AuthProvider = ({ children }) => {
       console.log(`Backend token exchange response: ${response.status} (${elapsed}ms elapsed)`);
       
       if (!response.ok) {
-        const errorText = await response.text();
-        console.error('Backend token exchange error:', errorText);
+        const errorData = await response.json();
+        console.error('Backend token exchange error:', errorData);
+        
+        // If it's a "code not valid" error, don't retry - just clear the URL
+        if (errorData.details?.error === 'invalid_grant') {
+          console.log('Auth code invalid/expired, clearing URL and staying logged out');
+          window.history.replaceState({}, document.title, window.location.pathname);
+          setLoading(false);
+          return;
+        }
+        
         throw new Error(`Backend token exchange failed: ${response.status}`);
       }
 
@@ -122,6 +147,13 @@ export const AuthProvider = ({ children }) => {
 
     } catch (error) {
       console.error('OAuth callback error:', error);
+      
+      // Don't call logout on auth code errors - just clear state
+      if (error.message.includes('Backend token exchange failed')) {
+        setLoading(false);
+        return;
+      }
+      
       logout();
     }
   };
