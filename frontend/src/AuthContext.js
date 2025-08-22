@@ -22,6 +22,9 @@ export const AuthProvider = ({ children }) => {
   // API base URL
   const API_BASE = process.env.REACT_APP_API_URL || '/api';
 
+  // Use consistent redirect URI
+  const REDIRECT_URI = 'https://tasks.coldforge.xyz';
+
   // Load Keycloak configuration
   useEffect(() => {
     const loadConfig = async () => {
@@ -65,19 +68,25 @@ export const AuthProvider = ({ children }) => {
   const handleOAuthCallback = async (code, state) => {
     try {
       if (!keycloakConfig) return;
-  
-      // Debug: Log what we're sending
+
+      // Prepare the token exchange request
       const requestBody = {
         grant_type: 'authorization_code',
         client_id: keycloakConfig.client_id,
         code: code,
-        redirect_uri: 'https://tasks.coldforge.xyz',
+        redirect_uri: REDIRECT_URI, // Use consistent redirect URI
       };
-  
-      console.log('Token exchange request body:', requestBody);
-      console.log('Token URL:', keycloakConfig.token_url);
-      console.log('Authorization code:', code);
-  
+
+      // Add client secret if available
+      if (keycloakConfig.client_secret) {
+        requestBody.client_secret = keycloakConfig.client_secret;
+      }
+
+      console.log('Token exchange request:', {
+        url: keycloakConfig.token_url,
+        body: requestBody
+      });
+
       // Exchange authorization code for access token
       const tokenResponse = await fetch(keycloakConfig.token_url, {
         method: 'POST',
@@ -86,24 +95,33 @@ export const AuthProvider = ({ children }) => {
         },
         body: new URLSearchParams(requestBody),
       });
-  
+
       console.log('Token response status:', tokenResponse.status);
       
       if (!tokenResponse.ok) {
         const errorText = await tokenResponse.text();
-        console.log('Token error response:', errorText);
-        throw new Error('Token exchange failed');
+        console.error('Token exchange error response:', errorText);
+        
+        // Try to parse error details
+        try {
+          const errorData = JSON.parse(errorText);
+          console.error('Parsed error:', errorData);
+        } catch (e) {
+          console.error('Raw error text:', errorText);
+        }
+        
+        throw new Error(`Token exchange failed: ${tokenResponse.status}`);
       }
-  
+
       const tokenData = await tokenResponse.json();
-      console.log('Token exchange successful, got access token');
+      console.log('Token exchange successful');
       
       const accessToken = tokenData.access_token;
-  
+
       // Store token and authenticate
       localStorage.setItem('token', accessToken);
       setToken(accessToken);
-  
+
       // Validate token and get user info
       await validateToken(accessToken);
     } catch (error) {
@@ -154,14 +172,15 @@ export const AuthProvider = ({ children }) => {
     const state = Math.random().toString(36).substring(2, 15);
     localStorage.setItem('oauth_state', state);
 
-    // Redirect to Keycloak
+    // Redirect to Keycloak - use same redirect URI
     const authUrl = new URL(keycloakConfig.auth_url);
     authUrl.searchParams.set('client_id', keycloakConfig.client_id);
-    authUrl.searchParams.set('redirect_uri', window.location.origin);
+    authUrl.searchParams.set('redirect_uri', REDIRECT_URI); // Use consistent redirect URI
     authUrl.searchParams.set('response_type', 'code');
     authUrl.searchParams.set('scope', 'openid profile email');
     authUrl.searchParams.set('state', state);
 
+    console.log('Redirecting to auth URL:', authUrl.toString());
     window.location.href = authUrl.toString();
   };
 
@@ -170,7 +189,7 @@ export const AuthProvider = ({ children }) => {
       if (keycloakConfig && token) {
         // Logout from Keycloak
         const logoutUrl = new URL(keycloakConfig.logout_url);
-        logoutUrl.searchParams.set('redirect_uri', window.location.origin);
+        logoutUrl.searchParams.set('redirect_uri', REDIRECT_URI); // Use consistent redirect URI
         
         // Clear local storage first
         localStorage.removeItem('token');
