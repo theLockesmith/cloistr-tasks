@@ -1,5 +1,5 @@
 import React from 'react';
-import { useAuth } from '../AuthContext';
+import { useAuth } from './AuthContext';
 
 function LoginScreen() {
   const { login, keycloakConfig, loading } = useAuth();
