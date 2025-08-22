@@ -145,7 +145,12 @@ function TaskListModal({ list, onClose, apiCall, user, onTasksUpdated }) {
       <div className="modal large" onClick={e => e.stopPropagation()}>
         <div className="modal-header">
           <div className="list-info">
-            <div className="list-icon large">
+            <div 
+              className="list-icon large"
+              style={{
+                backgroundColor: list.color || 'var(--primary)'
+              }}
+            >
               {list.icon || list.name.charAt(0).toUpperCase()}
             </div>
             <div>

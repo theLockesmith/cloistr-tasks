@@ -78,13 +78,15 @@ function AddListModal({ onClose, onSave, apiCall }) {
             </div>
             
             <div className="form-group">
-              <label>Icon Color</label>
-              <input
-                type="color"
-                value={formData.color}
-                onChange={e => setFormData({...formData, color: e.target.value})}
-                className="color-picker-square"
-              />
+              <div className="color-picker-container">
+                <label>Icon Color</label>
+                <input
+                  type="color"
+                  value={formData.color}
+                  onChange={e => setFormData({...formData, color: e.target.value})}
+                  className="color-picker-square"
+                />
+              </div>
             </div>
           </div>
           

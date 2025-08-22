@@ -66,7 +66,6 @@ function DragDropList({ items, onReorder, renderItem, itemKey = 'id', className 
             opacity: draggedItem && draggedItem.index === index ? 0.5 : 1,
           }}
         >
-          <div className="drag-handle">⋮⋮</div>
           <div className="drag-content">
             {renderItem(item, index)}
           </div>
