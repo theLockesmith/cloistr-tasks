@@ -112,11 +112,15 @@ function AuthenticatedApp() {
   };
 
   const getCompletionPercentage = (list) => {
-    const total = list.total_tasks || 0;
-    const completed = list.completed_tasks || 0;
+    const total = Number(list.total_tasks) || 0;
+    const completed = Number(list.completed_tasks) || 0;
+    
+    console.log('Debug percentage calc:', { total, completed, list }); // Temporary debug line
     
     if (total === 0) return 0;
-    return Math.round((completed / total) * 100);
+    
+    const percentage = Math.round((completed / total) * 100);
+    return isNaN(percentage) ? 0 : percentage;
   };
 
   const formatTime = (timeSlot) => {
