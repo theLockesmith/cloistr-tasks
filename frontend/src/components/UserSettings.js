@@ -4,7 +4,7 @@ function UserSettings({ onClose, apiCall, userSettings, setUserSettings, onSetti
   const [localSettings, setLocalSettings] = useState({
     previewTaskCount: 5,
     showCompletedInPreview: false,
-    theme: 'light',
+    theme: 'system',
     resetEnabled: true,
     resetTime: '06:00',
     resetTimezone: 'UTC',

@@ -117,26 +117,18 @@ function AuthenticatedApp() {
     }
   };
 
-  const resetTasksNow = async () => {
-    if (!window.confirm('Are you sure you want to reset all tasks? This will clear completion status and create new instances.')) {
-      return;
-    }
-
+  const toggleTaskFromPreview = async (taskId, listId) => {
     try {
-      const response = await apiCall('/user/reset', {
+      const response = await apiCall('/tasks/' + taskId + '/toggle', {
         method: 'POST',
       });
       
       if (response.ok) {
-        const result = await response.json();
-        alert('Tasks reset successfully! ' + result.tasksCreated + ' tasks created for today.');
+        loadTaskPreview(listId);
         loadLists();
-      } else {
-        alert('Failed to reset tasks');
       }
     } catch (error) {
-      console.error('Error resetting tasks:', error);
-      alert('Error resetting tasks');
+      console.error('Error toggling task from preview:', error);
     }
   };
 
@@ -159,21 +151,7 @@ function AuthenticatedApp() {
     return 'rgb(' + red + ',' + green + ',' + blue + ')';
   };
 
-  const toggleTaskFromPreview = async (taskId, listId) => {
-    try {
-      const response = await apiCall('/tasks/' + taskId + '/toggle', {
-        method: 'POST',
-      });
-      
-      if (response.ok) {
-        // Refresh the specific list's tasks and overall stats
-        loadTaskPreview(listId);
-        loadLists();
-      }
-    } catch (error) {
-      console.error('Error toggling task from preview:', error);
-    }
-  };
+  const getTaskPreviewForList = (listId) => {
     const tasks = taskPreviews[listId] || [];
     const incompleteTasks = tasks.filter(task => !task.completed_at);
     const completedTasks = tasks.filter(task => task.completed_at);
