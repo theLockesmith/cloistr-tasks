@@ -65,33 +65,45 @@ export const AuthProvider = ({ children }) => {
   const handleOAuthCallback = async (code, state) => {
     try {
       if (!keycloakConfig) return;
-
+  
+      // Debug: Log what we're sending
+      const requestBody = {
+        grant_type: 'authorization_code',
+        client_id: keycloakConfig.client_id,
+        code: code,
+        redirect_uri: 'https://tasks.coldforge.xyz',
+      };
+  
+      console.log('Token exchange request body:', requestBody);
+      console.log('Token URL:', keycloakConfig.token_url);
+      console.log('Authorization code:', code);
+  
       // Exchange authorization code for access token
       const tokenResponse = await fetch(keycloakConfig.token_url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
         },
-        body: new URLSearchParams({
-          grant_type: 'authorization_code',
-          client_id: keycloakConfig.client_id,
-          code: code,
-          //redirect_uri: window.location.origin,
-          redirect_uri: 'https://tasks.coldforge.xyz',
-        }),
+        body: new URLSearchParams(requestBody),
       });
-
+  
+      console.log('Token response status:', tokenResponse.status);
+      
       if (!tokenResponse.ok) {
+        const errorText = await tokenResponse.text();
+        console.log('Token error response:', errorText);
         throw new Error('Token exchange failed');
       }
-
+  
       const tokenData = await tokenResponse.json();
+      console.log('Token exchange successful, got access token');
+      
       const accessToken = tokenData.access_token;
-
+  
       // Store token and authenticate
       localStorage.setItem('token', accessToken);
       setToken(accessToken);
-
+  
       // Validate token and get user info
       await validateToken(accessToken);
     } catch (error) {
