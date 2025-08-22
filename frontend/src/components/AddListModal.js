@@ -67,7 +67,6 @@ function AddListModal({ onClose, onSave, apiCall }) {
           
           <div className="form-row">
             <div className="form-group">
-              <label>Icon (emoji or letter)</label>
               <input
                 type="text"
                 placeholder="Icon (emoji or letter)"
@@ -79,7 +78,7 @@ function AddListModal({ onClose, onSave, apiCall }) {
             
             <div className="form-group">
               <div className="color-picker-container">
-                <label>Icon Color</label>
+                <label>Color</label>
                 <input
                   type="color"
                   value={formData.color}
