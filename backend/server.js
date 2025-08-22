@@ -219,10 +219,19 @@ app.get('/api/lists', authenticateToken, async (req, res) => {
 });
 
 // Get tasks for a specific list (with ownership check)
-app.get('/api/lists/:listId/tasks', authenticateToken, requireOwnership(pool, 'task_lists'), async (req, res) => {
+app.get('/api/lists/:listId/tasks', authenticateToken, async (req, res) => {
   try {
     const { listId } = req.params;
     const today = new Date().toISOString().split('T')[0];
+    
+    // Check ownership inline
+    const ownershipCheck = await pool.query('SELECT user_id FROM task_lists WHERE id = $1', [listId]);
+    if (ownershipCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'List not found' });
+    }
+    if (ownershipCheck.rows[0].user_id !== req.user.id) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
     
     const result = await pool.query(`
       SELECT t.*, tt.name as template_name, tt.description as template_description,
@@ -242,7 +251,7 @@ app.get('/api/lists/:listId/tasks', authenticateToken, requireOwnership(pool, 't
 });
 
 // Toggle task completion (with ownership check)
-app.post('/api/tasks/:taskId/toggle', authenticateToken, requireOwnership(pool, 'tasks'), async (req, res) => {
+app.post('/api/tasks/:taskId/toggle', authenticateToken, async (req, res) => {
   try {
     const { taskId } = req.params;
     
@@ -296,10 +305,19 @@ app.post('/api/lists', authenticateToken, async (req, res) => {
 });
 
 // Add task template to list (with ownership check)
-app.post('/api/lists/:listId/templates', authenticateToken, requireOwnership(pool, 'task_lists'), async (req, res) => {
+app.post('/api/lists/:listId/templates', authenticateToken, async (req, res) => {
   try {
     const { listId } = req.params;
     const { name, description, timeSlot, estimatedMinutes } = req.body;
+    
+    // Check ownership inline
+    const ownershipCheck = await pool.query('SELECT user_id FROM task_lists WHERE id = $1', [listId]);
+    if (ownershipCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'List not found' });
+    }
+    if (ownershipCheck.rows[0].user_id !== req.user.id) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
     
     const result = await pool.query(`
       INSERT INTO task_templates (list_id, name, description, time_slot, estimated_minutes, sort_order)
@@ -319,7 +337,7 @@ app.post('/api/lists/:listId/templates', authenticateToken, requireOwnership(poo
 });
 
 // Update task template (with ownership check)
-app.put('/api/templates/:templateId', authenticateToken, requireOwnership(pool, 'task_templates'), async (req, res) => {
+app.put('/api/templates/:templateId', authenticateToken, async (req, res) => {
   try {
     const { templateId } = req.params;
     const { name, description, timeSlot, estimatedMinutes } = req.body;
@@ -346,7 +364,7 @@ app.put('/api/templates/:templateId', authenticateToken, requireOwnership(pool, 
 });
 
 // Delete task template (with ownership check)
-app.delete('/api/templates/:templateId', authenticateToken, requireOwnership(pool, 'task_templates'), async (req, res) => {
+app.delete('/api/templates/:templateId', authenticateToken, async (req, res) => {
   try {
     const { templateId } = req.params;
     

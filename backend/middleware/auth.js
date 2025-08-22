@@ -109,7 +109,7 @@ const requireAdmin = (req, res, next) => {
 };
 
 // User ownership check
-const requireOwnership = async (pool, table = 'task_lists') => {
+const requireOwnership = (pool, table = 'task_lists') => {
   return async (req, res, next) => {
     if (!req.user) {
       return res.status(401).json({ error: 'Authentication required' });
