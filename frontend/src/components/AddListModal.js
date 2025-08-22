@@ -77,7 +77,7 @@ function AddListModal({ onClose, onSave, apiCall }) {
               />
             </div>
             
-            <div className="form-group color-picker-container">
+            <div className="form-group">
               <label>Icon Color</label>
               <input
                 type="color"

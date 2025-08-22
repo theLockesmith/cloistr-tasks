@@ -4,6 +4,7 @@ import TaskListModal from './TaskListModal';
 import UserSettings from './UserSettings';
 import AddListModal from './AddListModal';
 import AddTaskModal from './AddTaskModal';
+import DragDropList from './DragDropList';
 
 function AuthenticatedApp() {
   const { user, logout, apiCall } = useAuth();
@@ -17,7 +18,7 @@ function AuthenticatedApp() {
   const [userSettings, setUserSettings] = useState({
     previewTaskCount: 5,
     showCompletedInPreview: false,
-    theme: 'light',
+    theme: 'system',
     resetEnabled: true,
     resetTime: '06:00',
     resetDays: 'daily',
@@ -90,7 +91,7 @@ function AuthenticatedApp() {
           ...prev,
           previewTaskCount: data.preview_task_count || 5,
           showCompletedInPreview: data.show_completed_in_preview || false,
-          theme: data.theme || 'light',
+          theme: data.theme || 'system',
           resetEnabled: data.reset_enabled !== false,
           resetTime: data.reset_time || '06:00',
           resetDays: data.reset_days || 'daily',
@@ -129,6 +130,24 @@ function AuthenticatedApp() {
       }
     } catch (error) {
       console.error('Error toggling task from preview:', error);
+    }
+  };
+
+  const reorderLists = async (newListOrder) => {
+    setLists(newListOrder);
+    
+    try {
+      const updatePromises = newListOrder.map((list, index) => 
+        apiCall('/lists/' + list.id, {
+          method: 'PUT',
+          body: JSON.stringify({ sort_order: index + 1 })
+        })
+      );
+      
+      await Promise.all(updatePromises);
+    } catch (error) {
+      console.error('Error updating list order:', error);
+      loadLists();
     }
   };
 
@@ -241,15 +260,19 @@ function AuthenticatedApp() {
               </button>
             </div>
           ) : (
-            <div className="lists-grid">
-              {lists.map(list => {
+            <DragDropList
+              items={lists}
+              onReorder={reorderLists}
+              itemKey="id"
+              isGrid={true}
+              className="lists-grid"
+              renderItem={(list) => {
                 const percentage = getCompletionPercentage(list);
                 const previewTasks = getTaskPreviewForList(list.id);
                 const totalTasks = taskPreviews[list.id]?.length || 0;
                 
                 return (
                   <div 
-                    key={list.id} 
                     className="list-card"
                     onClick={() => setSelectedList(list)}
                   >
@@ -355,8 +378,8 @@ function AuthenticatedApp() {
                     </div>
                   </div>
                 );
-              })}
-            </div>
+              }}
+            />
           )}
         </div>
       </div>

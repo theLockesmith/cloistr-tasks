@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import TaskItem from './TaskItem';
 import AddTaskModal from './AddTaskModal';
 import EditTaskModal from './EditTaskModal';
+import EditListModal from './EditListModal';
+import DragDropList from './DragDropList';
 
 function TaskListModal({ list, onClose, apiCall, user, onTasksUpdated }) {
   const [tasks, setTasks] = useState([]);
@@ -9,6 +11,7 @@ function TaskListModal({ list, onClose, apiCall, user, onTasksUpdated }) {
   const [error, setError] = useState(null);
   const [showAddTask, setShowAddTask] = useState(false);
   const [selectedTask, setSelectedTask] = useState(null);
+  const [showEditList, setShowEditList] = useState(false);
 
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -58,13 +61,34 @@ function TaskListModal({ list, onClose, apiCall, user, onTasksUpdated }) {
           task.id === taskId ? { ...task, completed_at: updatedTask.completed_at } : task
         ));
         
-        // Notify parent to refresh data
         if (onTasksUpdated) {
           onTasksUpdated();
         }
       }
     } catch (error) {
       console.error('Error toggling task:', error);
+    }
+  };
+
+  const reorderTasks = async (newTaskOrder) => {
+    setTasks(newTaskOrder);
+    
+    try {
+      const updatePromises = newTaskOrder.map((task, index) => 
+        apiCall('/templates/' + task.template_id, {
+          method: 'PUT',
+          body: JSON.stringify({ sort_order: index + 1 })
+        })
+      );
+      
+      await Promise.all(updatePromises);
+      
+      if (onTasksUpdated) {
+        onTasksUpdated();
+      }
+    } catch (error) {
+      console.error('Error updating task order:', error);
+      loadTasks();
     }
   };
 
@@ -128,6 +152,13 @@ function TaskListModal({ list, onClose, apiCall, user, onTasksUpdated }) {
               <h2>{list.name}</h2>
               <p>{list.description}</p>
             </div>
+            <button 
+              className="btn btn-secondary btn-small"
+              onClick={() => setShowEditList(true)}
+              title="Edit List"
+            >
+              ✎
+            </button>
           </div>
           
           <div className="list-stats">
@@ -152,25 +183,18 @@ function TaskListModal({ list, onClose, apiCall, user, onTasksUpdated }) {
               <p>No tasks for today. Add some tasks to get started!</p>
             </div>
           ) : (
-            <div className="tasks-list">
-              {incompleteTasks.map(task => (
+            <DragDropList
+              items={tasks}
+              onReorder={reorderTasks}
+              itemKey="id"
+              renderItem={(task) => (
                 <TaskItem 
-                  key={task.id} 
                   task={task} 
                   onToggle={toggleTask} 
                   onEdit={setSelectedTask}
                 />
-              ))}
-              
-              {completedTasks.map(task => (
-                <TaskItem 
-                  key={task.id} 
-                  task={task} 
-                  onToggle={toggleTask} 
-                  onEdit={setSelectedTask}
-                />
-              ))}
-            </div>
+              )}
+            />
           )}
         </div>
 
@@ -210,6 +234,23 @@ function TaskListModal({ list, onClose, apiCall, user, onTasksUpdated }) {
           onDelete={() => {
             loadTasks();
             setSelectedTask(null);
+            if (onTasksUpdated) onTasksUpdated();
+          }}
+          apiCall={apiCall}
+        />
+      )}
+
+      {showEditList && (
+        <EditListModal 
+          list={list}
+          onClose={() => setShowEditList(false)}
+          onSave={(updatedList) => {
+            setShowEditList(false);
+            if (onTasksUpdated) onTasksUpdated();
+          }}
+          onDelete={() => {
+            setShowEditList(false);
+            onClose();
             if (onTasksUpdated) onTasksUpdated();
           }}
           apiCall={apiCall}

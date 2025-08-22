@@ -445,6 +445,11 @@ body {
   backdrop-filter: blur(4px);
 }
 
+/* Nested modals should have higher z-index */
+.modal-overlay + .modal-overlay {
+  z-index: 1100;
+}
+
 .modal {
   background: var(--surface);
   border-radius: 16px;
@@ -455,6 +460,7 @@ body {
   border: 1px solid var(--border);
   max-height: 90vh;
   overflow-y: auto;
+  z-index: inherit;
 }
 
 .modal.large {
