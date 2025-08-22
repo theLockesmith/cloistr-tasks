@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useAuth } from './AuthContext';
+import { useAuth } from '../AuthContext';
 import TaskListModal from './TaskListModal';
 import UserSettings from './UserSettings';
 import AddListModal from './AddListModal';
@@ -159,7 +159,21 @@ function AuthenticatedApp() {
     return 'rgb(' + red + ',' + green + ',' + blue + ')';
   };
 
-  const getTaskPreviewForList = (listId) => {
+  const toggleTaskFromPreview = async (taskId, listId) => {
+    try {
+      const response = await apiCall('/tasks/' + taskId + '/toggle', {
+        method: 'POST',
+      });
+      
+      if (response.ok) {
+        // Refresh the specific list's tasks and overall stats
+        loadTaskPreview(listId);
+        loadLists();
+      }
+    } catch (error) {
+      console.error('Error toggling task from preview:', error);
+    }
+  };
     const tasks = taskPreviews[listId] || [];
     const incompleteTasks = tasks.filter(task => !task.completed_at);
     const completedTasks = tasks.filter(task => task.completed_at);
@@ -209,20 +223,16 @@ function AuthenticatedApp() {
               <button 
                 className="btn btn-secondary btn-small"
                 onClick={() => setShowSettings(true)}
+                title="Settings"
               >
-                Settings
-              </button>
-              <button 
-                className="btn btn-secondary btn-small"
-                onClick={resetTasksNow}
-              >
-                Reset Tasks Now
+                ⚙
               </button>
               <button 
                 className="btn btn-secondary btn-small"
                 onClick={logout}
+                title="Logout"
               >
-                Logout
+                ↗
               </button>
             </div>
           </div>
@@ -266,7 +276,12 @@ function AuthenticatedApp() {
                     onClick={() => setSelectedList(list)}
                   >
                     <div className="list-header">
-                      <div className="list-icon">
+                      <div 
+                        className="list-icon"
+                        style={{
+                          backgroundColor: list.color || 'var(--primary)'
+                        }}
+                      >
                         {list.icon || list.name.charAt(0).toUpperCase()}
                       </div>
                       <div>
@@ -319,7 +334,12 @@ function AuthenticatedApp() {
                               className="task-preview-item"
                               style={{
                                 opacity: task.completed_at ? 0.6 : 1,
-                                textDecoration: task.completed_at ? 'line-through' : 'none'
+                                textDecoration: task.completed_at ? 'line-through' : 'none',
+                                cursor: 'pointer'
+                              }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleTaskFromPreview(task.id, list.id);
                               }}
                             >
                               <div 
@@ -328,7 +348,8 @@ function AuthenticatedApp() {
                                   backgroundColor: task.completed_at 
                                     ? 'var(--primary)' 
                                     : 'var(--border)',
-                                  color: task.completed_at ? 'white' : 'var(--text-secondary)'
+                                  color: task.completed_at ? 'white' : 'var(--text-secondary)',
+                                  cursor: 'pointer'
                                 }}
                               >
                                 {task.completed_at ? '✓' : ''}
@@ -393,6 +414,10 @@ function AuthenticatedApp() {
           onClose={() => setSelectedList(null)}
           apiCall={apiCall}
           user={user}
+          onTasksUpdated={() => {
+            loadLists();
+            loadTaskPreview(selectedList.id);
+          }}
         />
       )}
 
@@ -408,7 +433,6 @@ function AuthenticatedApp() {
         />
       )}
     </div>
-  );
-}
+);
 
 export default AuthenticatedApp;

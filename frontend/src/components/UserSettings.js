@@ -17,6 +17,14 @@ function UserSettings({ onClose, apiCall, userSettings, setUserSettings, onSetti
   });
   const [loading, setLoading] = useState(false);
 
+  // Update local settings when userSettings prop changes
+  useEffect(() => {
+    setLocalSettings(prevLocal => ({
+      ...prevLocal,
+      ...userSettings
+    }));
+  }, [userSettings]);
+
   useEffect(() => {
     const handleKeyDown = (e) => {
       if (e.key === 'Escape') onClose();

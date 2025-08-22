@@ -749,12 +749,24 @@ body {
   }
 }
 
-/* Improved task preview styles */
-.task-preview {
+/* Enhanced form styling */
+.color-picker-container {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  margin-top: 1rem;
+}
+
+.color-picker-square {
+  width: 50px;
+  height: 50px;
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color 0.2s ease;
+}
+
+.color-picker-square:hover {
+  border-color: var(--primary);
 }
 
 .task-preview-item {
@@ -763,6 +775,11 @@ body {
   gap: 0.5rem;
   font-size: 0.85rem;
   padding: 0.25rem 0;
+  transition: opacity 0.2s ease;
+}
+
+.task-preview-item:hover {
+  opacity: 0.8;
 }
 
 .task-preview-checkbox {
@@ -774,6 +791,11 @@ body {
   border-radius: 3px;
   font-size: 10px;
   font-weight: bold;
+  transition: all 0.2s ease;
+}
+
+.task-preview-checkbox:hover {
+  transform: scale(1.1);
 }
 
 .task-preview-name {

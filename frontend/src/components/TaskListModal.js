@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import TaskItem from './TaskItem';
 
-function TaskListModal({ list, onClose, apiCall, user }) {
+function TaskListModal({ list, onClose, apiCall, user, onTasksUpdated }) {
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -53,6 +53,11 @@ function TaskListModal({ list, onClose, apiCall, user }) {
         setTasks(tasks.map(task => 
           task.id === taskId ? { ...task, completed_at: updatedTask.completed_at } : task
         ));
+        
+        // Notify parent to refresh data
+        if (onTasksUpdated) {
+          onTasksUpdated();
+        }
       }
     } catch (error) {
       console.error('Error toggling task:', error);
