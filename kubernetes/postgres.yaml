@@ -1,0 +1,294 @@
+# kubernetes/postgres.yaml
+# CloudNativePG cluster configuration
+
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: task-manager-postgres
+  namespace: task-manager
+spec:
+  instances: 3
+  
+  # PostgreSQL configuration
+  postgresql:
+    parameters:
+      max_connections: "200"
+      shared_buffers: "256MB"
+      effective_cache_size: "1GB"
+      maintenance_work_mem: "64MB"
+      checkpoint_completion_target: "0.9"
+      wal_buffers: "16MB"
+      default_statistics_target: "100"
+      random_page_cost: "1.1"
+      effective_io_concurrency: "200"
+    
+  # Bootstrap configuration
+  bootstrap:
+    initdb:
+      database: taskmanager
+      owner: taskuser
+      secret:
+        name: postgres-credentials
+  
+  # Storage configuration
+  storage:
+    size: 10Gi
+    storageClass: "fast-ssd"  # Adjust based on your storage classes
+  
+  # Monitoring
+  monitoring:
+    enabled: true
+    
+  # Backup configuration
+  backup:
+    barmanObjectStore:
+      destinationPath: "s3://your-backup-bucket/task-manager"  # Optional: configure S3 backups
+      s3Credentials:
+        accessKeyId:
+          name: backup-credentials
+          key: ACCESS_KEY_ID
+        secretAccessKey:
+          name: backup-credentials
+          key: SECRET_ACCESS_KEY
+      wal:
+        retention: "7d"
+      data:
+        retention: "30d"
+
+  # Resource limits
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "500m"
+    limits:
+      memory: "1Gi"
+      cpu: "1000m"
+
+---
+# Database credentials secret
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-credentials
+  namespace: task-manager
+type: kubernetes.io/basic-auth
+data:
+  username: dGFza3VzZXI=  # taskuser
+  password: dGFza3Bhc3M=  # taskpass (change this!)
+
+---
+# Backup credentials (optional)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: backup-credentials
+  namespace: task-manager
+type: Opaque
+data:
+  ACCESS_KEY_ID: ""  # Base64 encoded S3 access key
+  SECRET_ACCESS_KEY: ""  # Base64 encoded S3 secret key
+
+---
+# Database initialization job
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: db-init
+  namespace: task-manager
+spec:
+  template:
+    spec:
+      initContainers:
+      - name: wait-for-postgres
+        image: postgres:15-alpine
+        command: ['sh', '-c']
+        args:
+        - |
+          echo "Waiting for PostgreSQL to be ready..."
+          until pg_isready -h task-manager-postgres-rw -p 5432 -U taskuser; do
+            echo "PostgreSQL is not ready yet. Waiting..."
+            sleep 5
+          done
+          echo "PostgreSQL is ready!"
+        env:
+        - name: PGUSER
+          valueFrom:
+            secretKeyRef:
+              name: postgres-credentials
+              key: username
+        - name: PGPASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgres-credentials
+              key: password
+      
+      containers:
+      - name: db-init
+        image: node:18-alpine
+        workingDir: /app
+        command: ['sh', '-c']
+        args:
+        - |
+          # Install dependencies
+          npm init -y
+          npm install pg
+          
+          # Run database initialization
+          node -e "
+          const { Pool } = require('pg');
+          const fs = require('fs');
+          
+          async function init() {
+            const pool = new Pool({
+              host: 'task-manager-postgres-rw',
+              port: 5432,
+              database: 'taskmanager',
+              user: process.env.DB_USER,
+              password: process.env.DB_PASSWORD,
+            });
+            
+            try {
+              console.log('🚀 Initializing database schema...');
+              
+              // Check if tables exist
+              const result = await pool.query(\`
+                SELECT table_name 
+                FROM information_schema.tables 
+                WHERE table_schema = 'public' 
+                AND table_name IN ('task_lists', 'task_templates', 'tasks')
+              \`);
+              
+              if (result.rows.length === 0) {
+                console.log('📋 Creating initial schema...');
+                
+                // Create schema (inline for simplicity)
+                await pool.query(\`
+                  CREATE TABLE IF NOT EXISTS task_lists (
+                      id SERIAL PRIMARY KEY,
+                      name VARCHAR(100) NOT NULL,
+                      description TEXT,
+                      icon VARCHAR(10) DEFAULT '📋',
+                      color VARCHAR(7) DEFAULT '#3b82f6',
+                      sort_order INTEGER DEFAULT 0,
+                      active BOOLEAN DEFAULT true,
+                      created_at TIMESTAMP DEFAULT NOW(),
+                      updated_at TIMESTAMP DEFAULT NOW()
+                  );
+                  
+                  CREATE TABLE IF NOT EXISTS task_templates (
+                      id SERIAL PRIMARY KEY,
+                      list_id INTEGER REFERENCES task_lists(id) ON DELETE CASCADE,
+                      name VARCHAR(200) NOT NULL,
+                      description TEXT,
+                      time_slot VARCHAR(20),
+                      estimated_minutes INTEGER,
+                      sort_order INTEGER DEFAULT 0,
+                      active BOOLEAN DEFAULT true,
+                      created_at TIMESTAMP DEFAULT NOW(),
+                      updated_at TIMESTAMP DEFAULT NOW()
+                  );
+                  
+                  CREATE TABLE IF NOT EXISTS tasks (
+                      id SERIAL PRIMARY KEY,
+                      template_id INTEGER REFERENCES task_templates(id) ON DELETE CASCADE,
+                      list_id INTEGER REFERENCES task_lists(id) ON DELETE CASCADE,
+                      reset_date DATE NOT NULL,
+                      completed_at TIMESTAMP NULL,
+                      notes TEXT,
+                      created_at TIMESTAMP DEFAULT NOW(),
+                      updated_at TIMESTAMP DEFAULT NOW(),
+                      UNIQUE(template_id, reset_date)
+                  );
+                  
+                  -- Indexes
+                  CREATE INDEX IF NOT EXISTS idx_tasks_list_date ON tasks(list_id, reset_date);
+                  CREATE INDEX IF NOT EXISTS idx_tasks_template_date ON tasks(template_id, reset_date);
+                  CREATE INDEX IF NOT EXISTS idx_task_templates_list ON task_templates(list_id, sort_order);
+                  CREATE INDEX IF NOT EXISTS idx_task_lists_sort ON task_lists(sort_order);
+                \`);
+                
+                console.log('✅ Schema created successfully');
+                
+                // Insert sample data
+                const listsResult = await pool.query(\`
+                  INSERT INTO task_lists (name, description, icon, color, sort_order) VALUES
+                  ('Morning Routine', 'Start the day right', '🌅', '#f59e0b', 1),
+                  ('Work Tasks', 'Daily work responsibilities', '💼', '#3b82f6', 2),
+                  ('Evening Routine', 'End of day wrap-up', '🌙', '#8b5cf6', 3)
+                  RETURNING id, name
+                \`);
+                
+                const morningId = listsResult.rows.find(r => r.name === 'Morning Routine').id;
+                const workId = listsResult.rows.find(r => r.name === 'Work Tasks').id;
+                const eveningId = listsResult.rows.find(r => r.name === 'Evening Routine').id;
+                
+                await pool.query(\`
+                  INSERT INTO task_templates (list_id, name, description, time_slot, estimated_minutes, sort_order) VALUES
+                  -- Morning Routine
+                  (\${morningId}, 'Check email', 'Review overnight emails and prioritize', '8:30', 15, 1),
+                  (\${morningId}, 'Check teams', 'Review Teams messages and notifications', '8:45', 10, 2),
+                  (\${morningId}, 'Check web scraping', 'Verify scraping jobs completed successfully', '9:00', 10, 3),
+                  (\${morningId}, 'Review overnight alerts', 'Check monitoring dashboards for any issues', '9:05', 15, 4),
+                  (\${morningId}, 'Plan daily priorities', 'Set top 3 goals for the day', '9:15', 10, 5),
+                  
+                  -- Work Tasks
+                  (\${workId}, 'Review monitoring dashboards', 'Check system health across all services', 'morning', 20, 1),
+                  (\${workId}, 'Check Kubernetes cluster health', 'Verify all pods and services are running', 'morning', 15, 2),
+                  (\${workId}, 'Verify cert-manager renewals', 'Ensure SSL certificates are valid', 'morning', 10, 3),
+                  (\${workId}, 'Review ArgoCD deployments', 'Check deployment status and sync health', 'morning', 15, 4),
+                  (\${workId}, 'Check CI/CD pipeline status', 'Review build and deployment pipelines', 'afternoon', 10, 5),
+                  (\${workId}, 'Update project documentation', 'Keep docs current with recent changes', 'afternoon', 30, 6),
+                  (\${workId}, 'Review security alerts', 'Check for any security notifications', 'afternoon', 15, 7),
+                  
+                  -- Evening Routine
+                  (\${eveningId}, 'Archive completed work', 'Clean up workspace and organize files', 'evening', 15, 1),
+                  (\${eveningId}, 'Plan tomorrow priorities', 'Set agenda for next day', 'evening', 10, 2),
+                  (\${eveningId}, 'Final system health check', 'Ensure all systems stable for overnight', 'evening', 20, 3),
+                  (\${eveningId}, 'Backup verification', 'Confirm all backups completed successfully', 'evening', 10, 4),
+                  (\${eveningId}, 'Clear desktop/downloads', 'Organize local workspace', 'evening', 5, 5)
+                \`);
+                
+                console.log('✅ Sample data inserted successfully');
+              } else {
+                console.log('✅ Database already initialized');
+              }
+              
+              // Verify setup
+              const verification = await pool.query(\`
+                SELECT 
+                  (SELECT COUNT(*) FROM task_lists) as lists_count,
+                  (SELECT COUNT(*) FROM task_templates) as templates_count,
+                  (SELECT COUNT(*) FROM tasks) as tasks_count
+              \`);
+              
+              console.log('📊 Database setup complete!');
+              console.log(\`   • Task lists: \${verification.rows[0].lists_count}\`);
+              console.log(\`   • Task templates: \${verification.rows[0].templates_count}\`);
+              console.log(\`   • Daily tasks: \${verification.rows[0].tasks_count}\`);
+              
+            } catch (error) {
+              console.error('❌ Database initialization failed:', error);
+              process.exit(1);
+            } finally {
+              await pool.end();
+            }
+          }
+          
+          init().then(() => {
+            console.log('🎉 Database initialization completed!');
+            process.exit(0);
+          });
+          "
+        env:
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: postgres-credentials
+              key: username
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgres-credentials
+              key: password
+      restartPolicy: OnFailure
+  backoffLimit: 3

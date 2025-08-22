@@ -1,0 +1,397 @@
+# kubernetes/backend.yaml
+# Backend API deployment
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backend-config
+  namespace: task-manager
+data:
+  DB_HOST: "task-manager-postgres-rw"
+  DB_PORT: "5432"
+  DB_NAME: "taskmanager"
+  PORT: "3000"
+  NODE_ENV: "production"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: task-manager
+  labels:
+    app: backend
+    component: api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+        component: api
+    spec:
+      initContainers:
+      - name: wait-for-postgres
+        image: postgres:15-alpine
+        command: ['sh', '-c']
+        args:
+        - |
+          echo "Waiting for PostgreSQL to be ready..."
+          until pg_isready -h $DB_HOST -p $DB_PORT -U $DB_USER; do
+            echo "PostgreSQL is not ready yet. Waiting..."
+            sleep 5
+          done
+          echo "PostgreSQL is ready!"
+        env:
+        - name: DB_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: backend-config
+              key: DB_HOST
+        - name: DB_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: backend-config
+              key: DB_PORT
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: postgres-credentials
+              key: username
+        - name: PGPASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgres-credentials
+              key: password
+              
+      containers:
+      - name: backend
+        image: node:18-alpine
+        workingDir: /app
+        command: ['sh', '-c']
+        args:
+        - |
+          # Create package.json
+          cat > package.json << 'EOF'
+          {
+            "name": "task-manager-backend",
+            "version": "1.0.0",
+            "description": "Daily Task Manager REST API",
+            "main": "server.js",
+            "scripts": {
+              "start": "node server.js"
+            },
+            "dependencies": {
+              "express": "^4.18.2",
+              "pg": "^8.11.3",
+              "cors": "^2.8.5",
+              "helmet": "^7.1.0",
+              "morgan": "^1.10.0",
+              "dotenv": "^16.3.1"
+            }
+          }
+          EOF
+          
+          # Install dependencies
+          npm install
+          
+          # Start the application
+          node server.js
+        
+        ports:
+        - containerPort: 3000
+          name: http
+        
+        env:
+        - name: DB_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: backend-config
+              key: DB_HOST
+        - name: DB_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: backend-config
+              key: DB_PORT
+        - name: DB_NAME
+          valueFrom:
+            configMapKeyRef:
+              name: backend-config
+              key: DB_NAME
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: postgres-credentials
+              key: username
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgres-credentials
+              key: password
+        - name: PORT
+          valueFrom:
+            configMapKeyRef:
+              name: backend-config
+              key: PORT
+        - name: NODE_ENV
+          valueFrom:
+            configMapKeyRef:
+              name: backend-config
+              key: NODE_ENV
+        
+        volumeMounts:
+        - name: backend-code
+          mountPath: /app
+        
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "200m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+        
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+      
+      volumes:
+      - name: backend-code
+        configMap:
+          name: backend-code
+      
+      restartPolicy: Always
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backend-code
+  namespace: task-manager
+data:
+  server.js: |
+    // server.js - Task Manager Backend with Auto-Initialization
+    const express = require('express');
+    const { Pool } = require('pg');
+    const cors = require('cors');
+    const helmet = require('helmet');
+    const morgan = require('morgan');
+    
+    const app = express();
+    const port = process.env.PORT || 3000;
+    
+    // Database connection with auto-initialization
+    async function createPool() {
+      const pool = new Pool({
+        host: process.env.DB_HOST || 'localhost',
+        port: process.env.DB_PORT || 5432,
+        database: process.env.DB_NAME || 'taskmanager',
+        user: process.env.DB_USER || 'postgres',
+        password: process.env.DB_PASSWORD || 'postgres',
+      });
+      
+      // Test connection and initialize if needed
+      try {
+        await pool.query('SELECT 1');
+        console.log('✅ Database connection established');
+        return pool;
+      } catch (error) {
+        console.error('❌ Database connection failed:', error);
+        throw error;
+      }
+    }
+    
+    let pool;
+    
+    // Initialize and start server
+    async function startServer() {
+      try {
+        pool = await createPool();
+        
+        // Middleware
+        app.use(helmet());
+        app.use(cors());
+        app.use(morgan('combined'));
+        app.use(express.json());
+        
+        // Health check
+        app.get('/health', async (req, res) => {
+          try {
+            await pool.query('SELECT 1');
+            res.json({ 
+              status: 'ok', 
+              timestamp: new Date().toISOString(),
+              database: 'connected'
+            });
+          } catch (error) {
+            res.status(500).json({ 
+              status: 'error', 
+              timestamp: new Date().toISOString(),
+              database: 'disconnected',
+              error: error.message
+            });
+          }
+        });
+        
+        // Get all task lists
+        app.get('/api/lists', async (req, res) => {
+          try {
+            const result = await pool.query(`
+              SELECT l.*, 
+                     COUNT(t.id) as total_tasks,
+                     COUNT(CASE WHEN t.completed_at IS NOT NULL THEN 1 END) as completed_tasks
+              FROM task_lists l
+              LEFT JOIN tasks t ON l.id = t.list_id AND DATE(t.reset_date) = CURRENT_DATE
+              GROUP BY l.id
+              ORDER BY l.sort_order, l.name
+            `);
+            res.json(result.rows);
+          } catch (error) {
+            console.error('Error fetching lists:', error);
+            res.status(500).json({ error: 'Failed to fetch lists' });
+          }
+        });
+        
+        // Get tasks for a specific list
+        app.get('/api/lists/:listId/tasks', async (req, res) => {
+          try {
+            const { listId } = req.params;
+            const today = new Date().toISOString().split('T')[0];
+            
+            const result = await pool.query(`
+              SELECT t.*, tt.name as template_name, tt.description as template_description
+              FROM tasks t
+              JOIN task_templates tt ON t.template_id = tt.id
+              WHERE t.list_id = $1 AND DATE(t.reset_date) = $2
+              ORDER BY tt.sort_order, tt.name
+            `, [listId, today]);
+            
+            res.json(result.rows);
+          } catch (error) {
+            console.error('Error fetching tasks:', error);
+            res.status(500).json({ error: 'Failed to fetch tasks' });
+          }
+        });
+        
+        // Toggle task completion
+        app.post('/api/tasks/:taskId/toggle', async (req, res) => {
+          try {
+            const { taskId } = req.params;
+            
+            const result = await pool.query(`
+              UPDATE tasks 
+              SET completed_at = CASE 
+                WHEN completed_at IS NULL THEN NOW() 
+                ELSE NULL 
+              END,
+              updated_at = NOW()
+              WHERE id = $1
+              RETURNING *
+            `, [taskId]);
+            
+            if (result.rows.length === 0) {
+              return res.status(404).json({ error: 'Task not found' });
+            }
+            
+            res.json(result.rows[0]);
+          } catch (error) {
+            console.error('Error toggling task:', error);
+            res.status(500).json({ error: 'Failed to toggle task' });
+          }
+        });
+        
+        // Daily reset endpoint
+        app.post('/api/reset-daily', async (req, res) => {
+          try {
+            const today = new Date().toISOString().split('T')[0];
+            
+            const result = await pool.query(`
+              WITH new_tasks AS (
+                INSERT INTO tasks (template_id, list_id, reset_date, created_at)
+                SELECT tt.id, tt.list_id, $1, NOW()
+                FROM task_templates tt
+                WHERE tt.active = true
+                AND NOT EXISTS (
+                  SELECT 1 FROM tasks t 
+                  WHERE t.template_id = tt.id AND DATE(t.reset_date) = $1
+                )
+                RETURNING *
+              )
+              SELECT COUNT(*) as created_count FROM new_tasks
+            `, [today]);
+            
+            res.json({ 
+              message: 'Daily reset completed', 
+              tasksCreated: result.rows[0].created_count,
+              date: today 
+            });
+          } catch (error) {
+            console.error('Error during daily reset:', error);
+            res.status(500).json({ error: 'Failed to complete daily reset' });
+          }
+        });
+        
+        // Error handling
+        app.use((error, req, res, next) => {
+          console.error('Unhandled error:', error);
+          res.status(500).json({ error: 'Internal server error' });
+        });
+        
+        app.use((req, res) => {
+          res.status(404).json({ error: 'Endpoint not found' });
+        });
+        
+        // Start server
+        app.listen(port, () => {
+          console.log(`🎉 Task Manager API running on port ${port}`);
+        });
+        
+      } catch (error) {
+        console.error('💥 Failed to start server:', error);
+        process.exit(1);
+      }
+    }
+    
+    // Graceful shutdown
+    process.on('SIGTERM', async () => {
+      console.log('SIGTERM received, shutting down gracefully');
+      if (pool) await pool.end();
+      process.exit(0);
+    });
+    
+    startServer();
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-service
+  namespace: task-manager
+  labels:
+    app: backend
+spec:
+  selector:
+    app: backend
+  ports:
+  - name: http
+    port: 3000
+    targetPort: 3000
+    protocol: TCP
+  type: ClusterIP
