@@ -321,6 +321,11 @@ body {
 
 .task-content {
   flex: 1;
+  cursor: pointer;
+}
+
+.task-content:hover {
+  opacity: 0.8;
 }
 
 .task-main {
@@ -761,19 +766,33 @@ body {
 }
 
 /* Enhanced form styling */
+.form-group {
+  margin-bottom: 1rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.form-group label {
+  display: block;
+  margin-bottom: 0.5rem;
+  color: var(--text);
+  font-weight: 500;
+}
+
 .color-picker-container {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+  align-items: flex-start;
 }
 
 .color-picker-square {
-  width: 50px;
-  height: 50px;
+  width: 60px;
+  height: 60px;
   border: 2px solid var(--border);
   border-radius: 8px;
   cursor: pointer;
-  transition: border-color 0.2s ease;
+  transition: all 0.2s ease;
   padding: 0;
   background: none;
   -webkit-appearance: none;

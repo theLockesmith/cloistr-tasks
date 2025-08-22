@@ -10,7 +10,6 @@ function TaskItem({ task, onToggle, onEdit }) {
   return (
     <div 
       className={'task-item' + (task.completed_at ? ' completed' : '')}
-      onClick={() => onEdit && onEdit(task)}
       style={{ cursor: onEdit ? 'pointer' : 'default' }}
     >
       <input
@@ -21,9 +20,13 @@ function TaskItem({ task, onToggle, onEdit }) {
           onToggle(task.id);
         }}
         className="task-checkbox"
+        onClick={(e) => e.stopPropagation()}
       />
       
-      <div className="task-content">
+      <div 
+        className="task-content"
+        onClick={() => onEdit && onEdit(task)}
+      >
         <div className="task-main">
           <h4>{task.template_name}</h4>
           {task.time_slot && (

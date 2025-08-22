@@ -66,15 +66,18 @@ function AddListModal({ onClose, onSave, apiCall }) {
           />
           
           <div className="form-row">
-            <input
-              type="text"
-              placeholder="Icon (emoji or letter)"
-              value={formData.icon}
-              onChange={e => setFormData({...formData, icon: e.target.value})}
-              maxLength={2}
-            />
+            <div className="form-group">
+              <label>Icon (emoji or letter)</label>
+              <input
+                type="text"
+                placeholder="Icon (emoji or letter)"
+                value={formData.icon}
+                onChange={e => setFormData({...formData, icon: e.target.value})}
+                maxLength={2}
+              />
+            </div>
             
-            <div className="color-picker-container">
+            <div className="form-group color-picker-container">
               <label>Icon Color</label>
               <input
                 type="color"
