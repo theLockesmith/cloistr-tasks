@@ -152,10 +152,11 @@ $$ LANGUAGE plpgsql;
 
 -- Function to create today's tasks for a specific user
 CREATE OR REPLACE FUNCTION create_user_tasks_for_today(user_uuid VARCHAR(36))
-RETURNS INTEGER AS $$
+RETURNS INTEGER AS $
 DECLARE
     tasks_created INTEGER := 0;
     list_record RECORD;
+    insert_count INTEGER;
 BEGIN
     -- Check if user should reset today
     IF NOT should_reset_today(user_uuid) THEN
@@ -177,7 +178,8 @@ BEGIN
             AND DATE(t.reset_date) = CURRENT_DATE
         );
         
-        GET DIAGNOSTICS tasks_created = tasks_created + ROW_COUNT;
+        GET DIAGNOSTICS insert_count = ROW_COUNT;
+        tasks_created := tasks_created + insert_count;
     END LOOP;
     
     -- Record the reset in history
@@ -186,7 +188,7 @@ BEGIN
     
     RETURN tasks_created;
 END;
-$$ LANGUAGE plpgsql;
+$ LANGUAGE plpgsql;
 
 -- View for user tasks with settings
 CREATE OR REPLACE VIEW user_tasks_today AS
