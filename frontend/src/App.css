@@ -409,6 +409,17 @@ body {
   color: var(--text);
 }
 
+.btn-danger {
+  background: var(--error);
+  color: white;
+}
+
+.btn-danger:hover {
+  background: #dc2626;
+  transform: translateY(-1px);
+  box-shadow: var(--shadow);
+}
+
 .btn-small {
   padding: 0.5rem 1rem;
   font-size: 0.9rem;
@@ -763,10 +774,32 @@ body {
   border-radius: 8px;
   cursor: pointer;
   transition: border-color 0.2s ease;
+  padding: 0;
+  background: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+}
+
+.color-picker-square::-webkit-color-swatch-wrapper {
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+}
+
+.color-picker-square::-webkit-color-swatch {
+  border: none;
+  border-radius: 6px;
+}
+
+.color-picker-square::-moz-color-swatch {
+  border: none;
+  border-radius: 6px;
 }
 
 .color-picker-square:hover {
   border-color: var(--primary);
+  transform: scale(1.05);
 }
 
 .task-preview-item {

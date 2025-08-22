@@ -1,10 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import TaskItem from './TaskItem';
+import AddTaskModal from './AddTaskModal';
+import EditTaskModal from './EditTaskModal';
 
 function TaskListModal({ list, onClose, apiCall, user, onTasksUpdated }) {
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [showAddTask, setShowAddTask] = useState(false);
+  const [selectedTask, setSelectedTask] = useState(null);
 
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -150,20 +154,67 @@ function TaskListModal({ list, onClose, apiCall, user, onTasksUpdated }) {
           ) : (
             <div className="tasks-list">
               {incompleteTasks.map(task => (
-                <TaskItem key={task.id} task={task} onToggle={toggleTask} />
+                <TaskItem 
+                  key={task.id} 
+                  task={task} 
+                  onToggle={toggleTask} 
+                  onEdit={setSelectedTask}
+                />
               ))}
               
               {completedTasks.map(task => (
-                <TaskItem key={task.id} task={task} onToggle={toggleTask} />
+                <TaskItem 
+                  key={task.id} 
+                  task={task} 
+                  onToggle={toggleTask} 
+                  onEdit={setSelectedTask}
+                />
               ))}
             </div>
           )}
         </div>
 
         <div className="modal-actions">
+          <button 
+            className="btn btn-secondary"
+            onClick={() => setShowAddTask(true)}
+          >
+            + Add Task
+          </button>
           <button onClick={onClose} className="btn btn-primary">Close</button>
         </div>
       </div>
+
+      {showAddTask && (
+        <AddTaskModal 
+          listId={list.id}
+          onClose={() => setShowAddTask(false)}
+          onSave={() => {
+            loadTasks();
+            setShowAddTask(false);
+            if (onTasksUpdated) onTasksUpdated();
+          }}
+          apiCall={apiCall}
+        />
+      )}
+
+      {selectedTask && (
+        <EditTaskModal 
+          task={selectedTask}
+          onClose={() => setSelectedTask(null)}
+          onSave={() => {
+            loadTasks();
+            setSelectedTask(null);
+            if (onTasksUpdated) onTasksUpdated();
+          }}
+          onDelete={() => {
+            loadTasks();
+            setSelectedTask(null);
+            if (onTasksUpdated) onTasksUpdated();
+          }}
+          apiCall={apiCall}
+        />
+      )}
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import React from 'react';
 
-function TaskItem({ task, onToggle }) {
+function TaskItem({ task, onToggle, onEdit }) {
   const formatTime = (timeSlot) => {
     if (!timeSlot) return '';
     if (timeSlot.includes(':')) return timeSlot;
@@ -8,11 +8,18 @@ function TaskItem({ task, onToggle }) {
   };
 
   return (
-    <div className={'task-item' + (task.completed_at ? ' completed' : '')}>
+    <div 
+      className={'task-item' + (task.completed_at ? ' completed' : '')}
+      onClick={() => onEdit && onEdit(task)}
+      style={{ cursor: onEdit ? 'pointer' : 'default' }}
+    >
       <input
         type="checkbox"
         checked={!!task.completed_at}
-        onChange={() => onToggle(task.id)}
+        onChange={(e) => {
+          e.stopPropagation();
+          onToggle(task.id);
+        }}
         className="task-checkbox"
       />
       
