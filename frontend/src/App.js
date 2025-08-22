@@ -222,7 +222,7 @@ function AuthenticatedApp() {
                         ></div>
                       </div>
                       <p className="progress-text">
-                        {list.completed_tasks}/{list.total_tasks} completed ({getCompletionPercentage(list)}%)
+                      {list.completed_tasks || 0}/{list.total_tasks || 0} completed ({getCompletionPercentage(list)}%)
                       </p>
                     </div>
                     
