@@ -29,8 +29,21 @@ export const AuthProvider = ({ children }) => {
   useEffect(() => {
     const loadConfig = async () => {
       try {
+        // Check if we have auth code - if so, prioritize config loading
+        const urlParams = new URLSearchParams(window.location.search);
+        const hasAuthCode = urlParams.has('code');
+        
+        if (hasAuthCode) {
+          console.log('Auth code detected, prioritizing config load');
+        }
+        
         const response = await fetch(`${API_BASE}/auth/config`);
         const config = await response.json();
+        console.log('Keycloak config loaded:', { 
+          client_id: config.client_id,
+          auth_url: config.auth_url,
+          token_url: config.token_url 
+        });
         setKeycloakConfig(config);
       } catch (error) {
         console.error('Failed to load auth config:', error);
@@ -42,13 +55,14 @@ export const AuthProvider = ({ children }) => {
   // Initialize authentication
   useEffect(() => {
     const initAuth = async () => {
-      // Check for auth code in URL (OAuth callback)
+      // Check for auth code in URL (OAuth callback) - do this IMMEDIATELY
       const urlParams = new URLSearchParams(window.location.search);
       const code = urlParams.get('code');
       const state = urlParams.get('state');
 
       if (code && state) {
-        // Exchange code for token
+        console.log('Auth code detected, starting token exchange immediately');
+        // Exchange code for token ASAP
         await handleOAuthCallback(code, state);
         // Clean up URL
         window.history.replaceState({}, document.title, window.location.pathname);
@@ -60,14 +74,39 @@ export const AuthProvider = ({ children }) => {
       setLoading(false);
     };
 
-    if (keycloakConfig) {
+    // If we have an auth code, process it immediately even without keycloak config
+    const urlParams = new URLSearchParams(window.location.search);
+    const code = urlParams.get('code');
+    
+    if (code && keycloakConfig) {
+      initAuth();
+    } else if (code && !keycloakConfig) {
+      // Wait a bit for config to load, but not too long
+      console.log('Auth code found but config not loaded, waiting briefly...');
+      const timeout = setTimeout(() => {
+        if (keycloakConfig) {
+          initAuth();
+        } else {
+          console.error('Keycloak config still not loaded, code may expire');
+          setLoading(false);
+        }
+      }, 100); // Very short wait
+      
+      return () => clearTimeout(timeout);
+    } else if (keycloakConfig) {
       initAuth();
     }
   }, [keycloakConfig, token]);
 
   const handleOAuthCallback = async (code, state) => {
     try {
-      if (!keycloakConfig) return;
+      if (!keycloakConfig) {
+        console.error('Keycloak config not available for token exchange');
+        return;
+      }
+
+      console.log('Starting token exchange for code:', code.substring(0, 8) + '...');
+      const startTime = Date.now();
 
       // Prepare the token exchange request
       const requestBody = {
@@ -84,7 +123,7 @@ export const AuthProvider = ({ children }) => {
 
       console.log('Token exchange request:', {
         url: keycloakConfig.token_url,
-        body: requestBody
+        body: { ...requestBody, code: code.substring(0, 8) + '...' } // Don't log full code
       });
 
       // Exchange authorization code for access token
@@ -96,7 +135,8 @@ export const AuthProvider = ({ children }) => {
         body: new URLSearchParams(requestBody),
       });
 
-      console.log('Token response status:', tokenResponse.status);
+      const elapsed = Date.now() - startTime;
+      console.log(`Token response status: ${tokenResponse.status} (${elapsed}ms elapsed)`);
       
       if (!tokenResponse.ok) {
         const errorText = await tokenResponse.text();
