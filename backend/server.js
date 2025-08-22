@@ -130,6 +130,121 @@ app.post('/api/auth/login', optionalAuth, async (req, res) => {
   });
 });
 
+// Backend token exchange endpoint - handles OAuth callback
+app.post('/api/auth/callback', async (req, res) => {
+  try {
+    const { code, state, redirect_uri } = req.body;
+    
+    if (!code || !state) {
+      return res.status(400).json({ error: 'Missing code or state parameter' });
+    }
+    
+    console.log('Backend token exchange starting for code:', code.substring(0, 8) + '...');
+    const startTime = Date.now();
+    
+    // Prepare token exchange request
+    const tokenUrl = `${process.env.KEYCLOAK_URL}/realms/${process.env.KEYCLOAK_REALM}/protocol/openid-connect/token`;
+    
+    const requestBody = new URLSearchParams({
+      grant_type: 'authorization_code',
+      client_id: process.env.KEYCLOAK_CLIENT_ID,
+      code: code,
+      redirect_uri: redirect_uri || 'https://tasks.coldforge.xyz'
+    });
+
+    // Add client secret if available
+    if (process.env.KEYCLOAK_CLIENT_SECRET) {
+      requestBody.append('client_secret', process.env.KEYCLOAK_CLIENT_SECRET);
+    }
+
+    console.log('Exchanging token with Keycloak at:', tokenUrl);
+
+    // Exchange authorization code for access token
+    const tokenResponse = await fetch(tokenUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: requestBody,
+    });
+
+    const elapsed = Date.now() - startTime;
+    console.log(`Keycloak token response: ${tokenResponse.status} (${elapsed}ms elapsed)`);
+
+    if (!tokenResponse.ok) {
+      const errorText = await tokenResponse.text();
+      console.error('Keycloak token exchange error:', errorText);
+      
+      try {
+        const errorData = JSON.parse(errorText);
+        return res.status(400).json({ 
+          error: 'Token exchange failed', 
+          details: errorData 
+        });
+      } catch (e) {
+        return res.status(400).json({ 
+          error: 'Token exchange failed', 
+          details: errorText 
+        });
+      }
+    }
+
+    const tokenData = await tokenResponse.json();
+    const accessToken = tokenData.access_token;
+    
+    console.log('Token exchange successful, validating token...');
+
+    // Validate the token and get user info using existing auth middleware logic
+    const userInfoUrl = `${process.env.KEYCLOAK_URL}/realms/${process.env.KEYCLOAK_REALM}/protocol/openid-connect/userinfo`;
+    
+    const userResponse = await fetch(userInfoUrl, {
+      headers: {
+        'Authorization': `Bearer ${accessToken}`
+      }
+    });
+
+    if (!userResponse.ok) {
+      console.error('Failed to get user info from token');
+      return res.status(400).json({ error: 'Invalid token received' });
+    }
+
+    const keycloakUser = await userResponse.json();
+    
+    // Transform Keycloak user to our format (same as in auth middleware)
+    const userInfo = {
+      id: keycloakUser.sub,
+      email: keycloakUser.email,
+      username: keycloakUser.preferred_username,
+      firstName: keycloakUser.given_name,
+      lastName: keycloakUser.family_name,
+      roles: keycloakUser.realm_access?.roles || []
+    };
+
+    console.log('User validated:', userInfo.username);
+
+    // Sync user to database
+    const synced = await syncUser(userInfo);
+    if (!synced) {
+      console.error('Failed to sync user to database');
+      return res.status(500).json({ error: 'Failed to sync user data' });
+    }
+
+    // Return both token and user info to frontend
+    res.json({
+      token: accessToken,
+      user: userInfo,
+      message: 'Authentication successful'
+    });
+
+  } catch (error) {
+    console.error('Backend token exchange error:', error);
+    res.status(500).json({ 
+      error: 'Internal server error during token exchange',
+      details: error.message 
+    });
+  }
+});
+
 // Get current user profile and settings
 app.get('/api/user/profile', authenticateToken, async (req, res) => {
   try {

@@ -1,5 +1,5 @@
 // frontend/src/AuthContext.js
-// Keycloak authentication context
+// Keycloak authentication context with backend token exchange
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
 
@@ -29,20 +29,11 @@ export const AuthProvider = ({ children }) => {
   useEffect(() => {
     const loadConfig = async () => {
       try {
-        // Check if we have auth code - if so, prioritize config loading
-        const urlParams = new URLSearchParams(window.location.search);
-        const hasAuthCode = urlParams.has('code');
-        
-        if (hasAuthCode) {
-          console.log('Auth code detected, prioritizing config load');
-        }
-        
         const response = await fetch(`${API_BASE}/auth/config`);
         const config = await response.json();
         console.log('Keycloak config loaded:', { 
           client_id: config.client_id,
-          auth_url: config.auth_url,
-          token_url: config.token_url 
+          auth_url: config.auth_url 
         });
         setKeycloakConfig(config);
       } catch (error) {
@@ -55,14 +46,14 @@ export const AuthProvider = ({ children }) => {
   // Initialize authentication
   useEffect(() => {
     const initAuth = async () => {
-      // Check for auth code in URL (OAuth callback) - do this IMMEDIATELY
+      // Check for auth code in URL (OAuth callback)
       const urlParams = new URLSearchParams(window.location.search);
       const code = urlParams.get('code');
       const state = urlParams.get('state');
 
       if (code && state) {
-        console.log('Auth code detected, starting token exchange immediately');
-        // Exchange code for token ASAP
+        console.log('Auth code detected, exchanging via backend');
+        // Exchange code for token via backend
         await handleOAuthCallback(code, state);
         // Clean up URL
         window.history.replaceState({}, document.title, window.location.pathname);
@@ -74,96 +65,61 @@ export const AuthProvider = ({ children }) => {
       setLoading(false);
     };
 
-    // If we have an auth code, process it immediately even without keycloak config
+    // Process auth code immediately, don't wait for keycloak config
     const urlParams = new URLSearchParams(window.location.search);
     const code = urlParams.get('code');
     
-    if (code && keycloakConfig) {
+    if (code) {
+      // If we have an auth code, process it immediately
       initAuth();
-    } else if (code && !keycloakConfig) {
-      // Wait a bit for config to load, but not too long
-      console.log('Auth code found but config not loaded, waiting briefly...');
-      const timeout = setTimeout(() => {
-        if (keycloakConfig) {
-          initAuth();
-        } else {
-          console.error('Keycloak config still not loaded, code may expire');
-          setLoading(false);
-        }
-      }, 100); // Very short wait
-      
-      return () => clearTimeout(timeout);
     } else if (keycloakConfig) {
+      // Otherwise wait for config for other operations
       initAuth();
+    } else if (!keycloakConfig && !code) {
+      // No code and no config yet, just wait for config
+      setLoading(false);
     }
   }, [keycloakConfig, token]);
 
   const handleOAuthCallback = async (code, state) => {
     try {
-      if (!keycloakConfig) {
-        console.error('Keycloak config not available for token exchange');
-        return;
-      }
-
-      console.log('Starting token exchange for code:', code.substring(0, 8) + '...');
+      console.log('Starting backend token exchange for code:', code.substring(0, 8) + '...');
       const startTime = Date.now();
 
-      // Prepare the token exchange request
-      const requestBody = {
-        grant_type: 'authorization_code',
-        client_id: keycloakConfig.client_id,
-        code: code,
-        redirect_uri: REDIRECT_URI, // Use consistent redirect URI
-      };
-
-      // Add client secret if available
-      if (keycloakConfig.client_secret) {
-        requestBody.client_secret = keycloakConfig.client_secret;
-      }
-
-      console.log('Token exchange request:', {
-        url: keycloakConfig.token_url,
-        body: { ...requestBody, code: code.substring(0, 8) + '...' } // Don't log full code
-      });
-
-      // Exchange authorization code for access token
-      const tokenResponse = await fetch(keycloakConfig.token_url, {
+      // Let backend handle the token exchange
+      const response = await fetch(`${API_BASE}/auth/callback`, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
+          'Content-Type': 'application/json',
         },
-        body: new URLSearchParams(requestBody),
+        body: JSON.stringify({
+          code: code,
+          state: state,
+          redirect_uri: REDIRECT_URI
+        }),
       });
 
       const elapsed = Date.now() - startTime;
-      console.log(`Token response status: ${tokenResponse.status} (${elapsed}ms elapsed)`);
+      console.log(`Backend token exchange response: ${response.status} (${elapsed}ms elapsed)`);
       
-      if (!tokenResponse.ok) {
-        const errorText = await tokenResponse.text();
-        console.error('Token exchange error response:', errorText);
-        
-        // Try to parse error details
-        try {
-          const errorData = JSON.parse(errorText);
-          console.error('Parsed error:', errorData);
-        } catch (e) {
-          console.error('Raw error text:', errorText);
-        }
-        
-        throw new Error(`Token exchange failed: ${tokenResponse.status}`);
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Backend token exchange error:', errorText);
+        throw new Error(`Backend token exchange failed: ${response.status}`);
       }
 
-      const tokenData = await tokenResponse.json();
-      console.log('Token exchange successful');
+      const result = await response.json();
+      console.log('Backend token exchange successful');
       
-      const accessToken = tokenData.access_token;
+      // Backend returns both token and user info
+      const accessToken = result.token;
+      const userData = result.user;
 
-      // Store token and authenticate
+      // Store token and set user
       localStorage.setItem('token', accessToken);
       setToken(accessToken);
+      setUser(userData);
 
-      // Validate token and get user info
-      await validateToken(accessToken);
     } catch (error) {
       console.error('OAuth callback error:', error);
       logout();
@@ -212,10 +168,10 @@ export const AuthProvider = ({ children }) => {
     const state = Math.random().toString(36).substring(2, 15);
     localStorage.setItem('oauth_state', state);
 
-    // Redirect to Keycloak - use same redirect URI
+    // Redirect to Keycloak
     const authUrl = new URL(keycloakConfig.auth_url);
     authUrl.searchParams.set('client_id', keycloakConfig.client_id);
-    authUrl.searchParams.set('redirect_uri', REDIRECT_URI); // Use consistent redirect URI
+    authUrl.searchParams.set('redirect_uri', REDIRECT_URI);
     authUrl.searchParams.set('response_type', 'code');
     authUrl.searchParams.set('scope', 'openid profile email');
     authUrl.searchParams.set('state', state);
@@ -229,7 +185,7 @@ export const AuthProvider = ({ children }) => {
       if (keycloakConfig && token) {
         // Logout from Keycloak
         const logoutUrl = new URL(keycloakConfig.logout_url);
-        logoutUrl.searchParams.set('redirect_uri', REDIRECT_URI); // Use consistent redirect URI
+        logoutUrl.searchParams.set('redirect_uri', REDIRECT_URI);
         
         // Clear local storage first
         localStorage.removeItem('token');
