@@ -193,6 +193,11 @@ export const AuthProvider = ({ children }) => {
       }
 
       const result = await response.json();
+      console.log('OAuth callback result:', { 
+        hasAccessToken: !!result.access_token,
+        hasRefreshToken: !!result.refresh_token,
+        expiresIn: result.expires_in 
+      });
       
       // Store tokens and user data
       const accessToken = result.access_token;

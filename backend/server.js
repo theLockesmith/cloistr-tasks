@@ -193,10 +193,13 @@ app.post('/api/auth/callback', async (req, res) => {
 
     const tokenData = await tokenResponse.json();
     const accessToken = tokenData.access_token;
+    const refreshToken = tokenData.refresh_token; // Get refresh token
+    const expiresIn = tokenData.expires_in; // Get expiration time
     
-    console.log('Token exchange successful, validating token...');
+    console.log('Token exchange successful, access token expires in:', expiresIn, 'seconds');
+    console.log('Refresh token available:', !!refreshToken);
 
-    // Validate the token and get user info using existing auth middleware logic
+    // Validate the token and get user info
     const userInfoUrl = `${process.env.KEYCLOAK_URL}/realms/${process.env.KEYCLOAK_REALM}/protocol/openid-connect/userinfo`;
     
     const userResponse = await fetch(userInfoUrl, {
@@ -212,7 +215,7 @@ app.post('/api/auth/callback', async (req, res) => {
 
     const keycloakUser = await userResponse.json();
     
-    // Transform Keycloak user to our format (same as in auth middleware)
+    // Transform Keycloak user to our format
     const userInfo = {
       id: keycloakUser.sub,
       email: keycloakUser.email,
@@ -231,9 +234,16 @@ app.post('/api/auth/callback', async (req, res) => {
       return res.status(500).json({ error: 'Failed to sync user data' });
     }
 
-    // Return both token and user info to frontend
+    // Calculate expiration timestamp
+    const expiresAt = new Date(Date.now() + (expiresIn * 1000)).toISOString();
+
+    // Return comprehensive token data to frontend
     res.json({
-      token: accessToken,
+      access_token: accessToken,
+      refresh_token: refreshToken,
+      token_type: 'Bearer',
+      expires_in: expiresIn,
+      expires_at: expiresAt,
       user: userInfo,
       message: 'Authentication successful'
     });
@@ -244,6 +254,149 @@ app.post('/api/auth/callback', async (req, res) => {
       error: 'Internal server error during token exchange',
       details: error.message 
     });
+  }
+});
+
+// NEW: Token refresh endpoint
+app.post('/api/auth/refresh', async (req, res) => {
+  try {
+    const { refresh_token } = req.body;
+    
+    if (!refresh_token) {
+      return res.status(400).json({ 
+        error: 'Refresh token required',
+        action: 'login_required'
+      });
+    }
+    
+    console.log('Attempting token refresh...');
+    const startTime = Date.now();
+    
+    const tokenUrl = `${process.env.KEYCLOAK_URL}/realms/${process.env.KEYCLOAK_REALM}/protocol/openid-connect/token`;
+    
+    const requestBody = new URLSearchParams({
+      grant_type: 'refresh_token',
+      client_id: process.env.KEYCLOAK_CLIENT_ID,
+      refresh_token: refresh_token
+    });
+
+    // Add client secret if available
+    if (process.env.KEYCLOAK_CLIENT_SECRET) {
+      requestBody.append('client_secret', process.env.KEYCLOAK_CLIENT_SECRET);
+    }
+
+    const tokenResponse = await fetch(tokenUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: requestBody,
+    });
+
+    const elapsed = Date.now() - startTime;
+    console.log(`Token refresh response: ${tokenResponse.status} (${elapsed}ms elapsed)`);
+
+    if (!tokenResponse.ok) {
+      const errorText = await tokenResponse.text();
+      console.error('Token refresh failed:', errorText);
+      
+      // Parse error details
+      let errorDetails;
+      try {
+        errorDetails = JSON.parse(errorText);
+      } catch (e) {
+        errorDetails = { error: errorText };
+      }
+      
+      // Check if refresh token is invalid/expired
+      if (errorDetails.error === 'invalid_grant' || tokenResponse.status === 400) {
+        return res.status(401).json({ 
+          error: 'Refresh token invalid or expired',
+          action: 'login_required',
+          details: errorDetails
+        });
+      }
+      
+      return res.status(500).json({ 
+        error: 'Token refresh failed',
+        details: errorDetails
+      });
+    }
+
+    const tokenData = await tokenResponse.json();
+    const newAccessToken = tokenData.access_token;
+    const newRefreshToken = tokenData.refresh_token || refresh_token; // Some configs don't rotate refresh tokens
+    const expiresIn = tokenData.expires_in;
+    
+    // Calculate expiration timestamp
+    const expiresAt = new Date(Date.now() + (expiresIn * 1000)).toISOString();
+    
+    console.log('Token refresh successful, new token expires in:', expiresIn, 'seconds');
+    
+    res.json({
+      access_token: newAccessToken,
+      refresh_token: newRefreshToken,
+      token_type: 'Bearer',
+      expires_in: expiresIn,
+      expires_at: expiresAt,
+      message: 'Token refreshed successfully'
+    });
+
+  } catch (error) {
+    console.error('Token refresh error:', error);
+    res.status(500).json({ 
+      error: 'Internal server error during token refresh',
+      details: error.message 
+    });
+  }
+});
+
+// Enhanced authentication middleware with refresh token awareness
+const authenticateTokenWithRefresh = async (req, res, next) => {
+  try {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
+
+    if (!token) {
+      return res.status(401).json({ 
+        error: 'Access token required',
+        action: 'login_required'
+      });
+    }
+
+    // Validate token with Keycloak
+    const user = await validateTokenWithKeycloak(token);
+    
+    if (!user) {
+      // Token is invalid/expired
+      return res.status(401).json({ 
+        error: 'Token expired or invalid',
+        action: 'refresh_required'
+      });
+    }
+
+    // Add user to request object
+    req.user = user;
+    next();
+  } catch (error) {
+    console.error('Token verification failed:', error);
+    return res.status(500).json({ 
+      error: 'Token verification failed',
+      details: error.message 
+    });
+  }
+};
+
+// Optional: Add token introspection endpoint for debugging
+app.get('/api/auth/token-info', authenticateTokenWithRefresh, async (req, res) => {
+  try {
+    res.json({
+      user: req.user,
+      token_valid: true,
+      server_time: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to get token info' });
   }
 });
 
