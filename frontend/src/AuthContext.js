@@ -160,7 +160,11 @@ export const AuthProvider = ({ children }) => {
       setLoading(false);
     };
 
-    if (code || keycloakConfig || token) {
+    // Check for auth code in URL
+    const urlParams = new URLSearchParams(window.location.search);
+    const authCode = urlParams.get('code');
+    
+    if (authCode || keycloakConfig || token) {
       initAuth();
     } else {
       setLoading(false);
