@@ -152,43 +152,42 @@ $$ LANGUAGE plpgsql;
 
 -- Function to create today's tasks for a specific user
 CREATE OR REPLACE FUNCTION create_user_tasks_for_today(user_uuid VARCHAR(36))
-RETURNS INTEGER AS $
+RETURNS INTEGER AS $$
 DECLARE
-    tasks_created INTEGER := 0;
-    list_record RECORD;
-    insert_count INTEGER;
+    total_created INTEGER;
 BEGIN
     -- Check if user should reset today
     IF NOT should_reset_today(user_uuid) THEN
         RETURN 0;
     END IF;
     
-    -- Create tasks for each of the user's lists
-    FOR list_record IN 
-        SELECT id FROM task_lists WHERE user_id = user_uuid AND active = true
-    LOOP
+    -- Create tasks from all active templates for this user
+    WITH inserted_tasks AS (
         INSERT INTO tasks (template_id, list_id, reset_date, created_at)
         SELECT tt.id, tt.list_id, CURRENT_DATE, NOW()
         FROM task_templates tt
-        WHERE tt.list_id = list_record.id 
+        JOIN task_lists tl ON tt.list_id = tl.id
+        WHERE tl.user_id = user_uuid 
         AND tt.active = true
+        AND tl.active = true
         AND NOT EXISTS (
             SELECT 1 FROM tasks t 
             WHERE t.template_id = tt.id 
             AND DATE(t.reset_date) = CURRENT_DATE
-        );
-        
-        GET DIAGNOSTICS insert_count = ROW_COUNT;
-        tasks_created := tasks_created + insert_count;
-    END LOOP;
+        )
+        RETURNING id
+    )
+    SELECT COUNT(*) INTO total_created FROM inserted_tasks;
     
-    -- Record the reset in history
-    INSERT INTO reset_history (user_id, reset_date, tasks_created, trigger_type)
-    VALUES (user_uuid, CURRENT_DATE, tasks_created, 'automatic');
+    -- Record the reset in history if tasks were created
+    IF total_created > 0 THEN
+        INSERT INTO reset_history (user_id, reset_date, tasks_created, trigger_type)
+        VALUES (user_uuid, CURRENT_DATE, total_created, 'automatic');
+    END IF;
     
-    RETURN tasks_created;
+    RETURN COALESCE(total_created, 0);
 END;
-$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql;
 
 -- View for user tasks with settings
 CREATE OR REPLACE VIEW user_tasks_today AS
