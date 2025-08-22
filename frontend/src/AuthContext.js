@@ -76,8 +76,8 @@ export const AuthProvider = ({ children }) => {
           grant_type: 'authorization_code',
           client_id: keycloakConfig.client_id,
           code: code,
-          redirect_uri: window.location.origin,
-          state: state
+          //redirect_uri: window.location.origin,
+          redirect_uri: 'https://tasks.coldforge.xyz',
         }),
       });
 
