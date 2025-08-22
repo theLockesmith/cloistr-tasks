@@ -1,4 +1,4 @@
-// middleware/auth.js - Updated Keycloak Authentication Middleware
+// middleware/auth.js - Enhanced with better error handling and debugging
 require('dotenv').config();
 
 // Function to validate token with Keycloak and get user info
@@ -6,18 +6,24 @@ async function validateTokenWithKeycloak(token) {
   try {
     const userInfoUrl = `${process.env.KEYCLOAK_URL}/realms/${process.env.KEYCLOAK_REALM}/protocol/openid-connect/userinfo`;
     
+    console.log('Validating token with Keycloak:', userInfoUrl);
+    
     const response = await fetch(userInfoUrl, {
       headers: {
         'Authorization': `Bearer ${token}`
       }
     });
 
+    console.log('Keycloak validation response:', response.status);
+
     if (!response.ok) {
-      console.log('Token validation failed with Keycloak:', response.status);
+      const errorText = await response.text();
+      console.log('Keycloak validation error details:', errorText);
       return null;
     }
 
     const keycloakUser = await response.json();
+    console.log('Token validated successfully for user:', keycloakUser.preferred_username);
     
     // Transform Keycloak user to our format
     return {
@@ -40,7 +46,15 @@ const authenticateToken = async (req, res, next) => {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
 
+    console.log('=== AUTH DEBUG ===');
+    console.log('Auth header present:', !!authHeader);
+    console.log('Token present:', !!token);
+    console.log('Token length:', token ? token.length : 0);
+    console.log('Token start:', token ? token.substring(0, 20) + '...' : 'none');
+    console.log('==================');
+
     if (!token) {
+      console.log('No token provided');
       return res.status(401).json({ 
         error: 'Access token required',
         keycloak_url: `${process.env.KEYCLOAK_URL}/realms/${process.env.KEYCLOAK_REALM}/protocol/openid-connect/auth`
@@ -51,12 +65,16 @@ const authenticateToken = async (req, res, next) => {
     const user = await validateTokenWithKeycloak(token);
     
     if (!user) {
+      console.log('Token validation failed - token invalid or expired');
       return res.status(403).json({ 
         error: 'Invalid or expired token',
+        action: 'refresh_required',
         keycloak_url: `${process.env.KEYCLOAK_URL}/realms/${process.env.KEYCLOAK_REALM}/protocol/openid-connect/auth`
       });
     }
 
+    console.log('Authentication successful for user:', user.username);
+    
     // Add user to request object
     req.user = user;
     next();
@@ -64,6 +82,7 @@ const authenticateToken = async (req, res, next) => {
     console.error('Token verification failed:', error);
     return res.status(403).json({ 
       error: 'Token verification failed',
+      details: error.message,
       keycloak_url: `${process.env.KEYCLOAK_URL}/realms/${process.env.KEYCLOAK_REALM}/protocol/openid-connect/auth`
     });
   }

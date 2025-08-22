@@ -449,7 +449,8 @@ app.post('/api/lists/:listId/templates', authenticateToken, async (req, res) => 
       return res.status(403).json({ error: 'Access denied' });
     }
     
-    const result = await pool.query(`
+    // Create the template
+    const templateResult = await pool.query(`
       INSERT INTO task_templates (list_id, name, description, time_slot, estimated_minutes, sort_order)
       VALUES ($1, $2, $3, $4, $5, (
         SELECT COALESCE(MAX(sort_order), 0) + 1 
@@ -459,7 +460,19 @@ app.post('/api/lists/:listId/templates', authenticateToken, async (req, res) => 
       RETURNING *
     `, [listId, name, description, timeSlot, estimatedMinutes]);
     
-    res.status(201).json(result.rows[0]);
+    const newTemplate = templateResult.rows[0];
+    
+    // Automatically create today's task instance from this template
+    const taskResult = await pool.query(`
+      INSERT INTO tasks (template_id, list_id, reset_date, created_at)
+      VALUES ($1, $2, CURRENT_DATE, NOW())
+      ON CONFLICT (template_id, reset_date) DO NOTHING
+      RETURNING *
+    `, [newTemplate.id, listId]);
+    
+    console.log(`Created template ${newTemplate.id} and task instance for today`);
+    
+    res.status(201).json(newTemplate);
   } catch (error) {
     console.error('Error creating task template:', error);
     res.status(500).json({ error: 'Failed to create task template' });
