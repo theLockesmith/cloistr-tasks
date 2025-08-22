@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useAuth } from './AuthContext';
+import { useAuth } from '../AuthContext';
 import TaskListModal from './TaskListModal';
 import UserSettings from './UserSettings';
 import AddListModal from './AddListModal';
@@ -118,7 +118,7 @@ function AuthenticatedApp() {
   };
 
   const resetTasksNow = async () => {
-    if (!confirm('Are you sure you want to reset all tasks? This will clear completion status and create new instances.')) {
+    if (!window.confirm('Are you sure you want to reset all tasks? This will clear completion status and create new instances.')) {
       return;
     }
 

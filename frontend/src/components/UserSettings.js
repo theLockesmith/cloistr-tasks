@@ -62,7 +62,7 @@ function UserSettings({ onClose, apiCall, userSettings, setUserSettings, onSetti
   };
 
   const handleManualReset = async () => {
-    if (!confirm('Are you sure you want to reset all tasks? This will create new task instances for today.')) {
+    if (!window.confirm('Are you sure you want to reset all tasks? This will create new task instances for today.')) {
       return;
     }
 
