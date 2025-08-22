@@ -23,6 +23,8 @@ app.use(express.json());
 // User sync/creation function
 async function syncUser(userInfo) {
   try {
+    console.log('Syncing user:', userInfo.id, typeof userInfo.id); // Debug line
+    
     // Upsert user
     await pool.query(`
       INSERT INTO users (id, email, username, first_name, last_name, last_login)
@@ -402,15 +404,28 @@ app.post('/api/lists', authenticateToken, async (req, res) => {
     
     const { name, description, icon, color } = req.body;
     
+    // First, get the next sort order for this user
+    const sortResult = await pool.query(`
+      SELECT COALESCE(MAX(sort_order), 0) + 1 as next_sort_order
+      FROM task_lists 
+      WHERE user_id = $1
+    `, [req.user.id]);
+    
+    const nextSortOrder = sortResult.rows[0].next_sort_order;
+    
+    // Then insert the new list
     const result = await pool.query(`
       INSERT INTO task_lists (name, description, icon, color, user_id, sort_order)
-      VALUES ($1, $2, $3, $4, $5, (
-        SELECT COALESCE(MAX(sort_order), 0) + 1 
-        FROM task_lists 
-        WHERE user_id = $5
-      ))
+      VALUES ($1, $2, $3, $4, $5, $6)
       RETURNING *
-    `, [name, description, icon || '📋', color || '#3b82f6', req.user.id]);
+    `, [
+      name, 
+      description, 
+      icon || '📋', 
+      color || '#3b82f6', 
+      req.user.id, 
+      nextSortOrder
+    ]);
     
     res.status(201).json(result.rows[0]);
   } catch (error) {
