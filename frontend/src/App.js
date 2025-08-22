@@ -112,8 +112,11 @@ function AuthenticatedApp() {
   };
 
   const getCompletionPercentage = (list) => {
-    if (list.total_tasks === 0) return 0;
-    return Math.round((list.completed_tasks / list.total_tasks) * 100);
+    const total = list.total_tasks || 0;
+    const completed = list.completed_tasks || 0;
+    
+    if (total === 0) return 0;
+    return Math.round((completed / total) * 100);
   };
 
   const formatTime = (timeSlot) => {
