@@ -1,64 +1,54 @@
-// frontend/src/UserSettings.js
-// User settings component for reset schedules and preferences
-
 import React, { useState, useEffect } from 'react';
-import { useAuth } from './AuthContext';
 
-const UserSettings = ({ onClose }) => {
-  const { apiCall, user } = useAuth();
-  const [settings, setSettings] = useState({
-    reset_enabled: true,
-    reset_time: '06:00',
-    reset_timezone: 'UTC',
-    reset_days: 'daily',
-    custom_reset_days: [],
-    auto_create_tasks: true,
+function UserSettings({ onClose, apiCall, userSettings, setUserSettings, onSettingsUpdate }) {
+  const [localSettings, setLocalSettings] = useState({
+    previewTaskCount: 5,
+    showCompletedInPreview: false,
     theme: 'light',
-    notification_email: false,
-    notification_browser: true
+    resetEnabled: true,
+    resetTime: '06:00',
+    resetTimezone: 'UTC',
+    resetDays: 'daily',
+    customResetDays: [],
+    autoCreateTasks: true,
+    notificationEmail: false,
+    notificationBrowser: true,
+    ...userSettings
   });
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(false);
 
-  // Load user settings
   useEffect(() => {
-    const loadSettings = async () => {
-      try {
-        const response = await apiCall('/user/profile');
-        if (response.ok) {
-          const userData = await response.json();
-          setSettings({
-            reset_enabled: userData.reset_enabled ?? true,
-            reset_time: userData.reset_time ?? '06:00',
-            reset_timezone: userData.reset_timezone ?? 'UTC',
-            reset_days: userData.reset_days ?? 'daily',
-            custom_reset_days: userData.custom_reset_days ?? [],
-            auto_create_tasks: userData.auto_create_tasks ?? true,
-            theme: userData.theme ?? 'light',
-            notification_email: userData.notification_email ?? false,
-            notification_browser: userData.notification_browser ?? true
-          });
-        }
-      } catch (error) {
-        console.error('Error loading settings:', error);
-      } finally {
-        setLoading(false);
-      }
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') onClose();
     };
 
-    loadSettings();
-  }, [apiCall]);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
 
   const handleSave = async () => {
-    setSaving(true);
+    setLoading(true);
     try {
       const response = await apiCall('/user/settings', {
         method: 'PUT',
-        body: JSON.stringify(settings)
+        body: JSON.stringify({
+          preview_task_count: localSettings.previewTaskCount,
+          show_completed_in_preview: localSettings.showCompletedInPreview,
+          theme: localSettings.theme,
+          reset_enabled: localSettings.resetEnabled,
+          reset_time: localSettings.resetTime,
+          reset_timezone: localSettings.resetTimezone,
+          reset_days: localSettings.resetDays,
+          custom_reset_days: localSettings.customResetDays,
+          auto_create_tasks: localSettings.autoCreateTasks,
+          notification_email: localSettings.notificationEmail,
+          notification_browser: localSettings.notificationBrowser
+        })
       });
-
+      
       if (response.ok) {
-        alert('Settings saved successfully!');
+        setUserSettings(localSettings);
+        onSettingsUpdate();
         onClose();
       } else {
         alert('Failed to save settings');
@@ -67,16 +57,21 @@ const UserSettings = ({ onClose }) => {
       console.error('Error saving settings:', error);
       alert('Error saving settings');
     } finally {
-      setSaving(false);
+      setLoading(false);
     }
   };
 
   const handleManualReset = async () => {
+    if (!confirm('Are you sure you want to reset all tasks? This will create new task instances for today.')) {
+      return;
+    }
+
     try {
       const response = await apiCall('/user/reset', { method: 'POST' });
       if (response.ok) {
         const result = await response.json();
-        alert(`Manual reset completed! ${result.tasksCreated} tasks created.`);
+        alert('Manual reset completed! ' + result.tasksCreated + ' tasks created.');
+        onSettingsUpdate();
       } else {
         alert('Failed to reset tasks');
       }
@@ -93,69 +88,113 @@ const UserSettings = ({ onClose }) => {
   ];
 
   const weekdays = [
-    { value: 0, label: 'Sunday' },
-    { value: 1, label: 'Monday' },
-    { value: 2, label: 'Tuesday' },
-    { value: 3, label: 'Wednesday' },
-    { value: 4, label: 'Thursday' },
-    { value: 5, label: 'Friday' },
-    { value: 6, label: 'Saturday' }
+    { value: 'sunday', label: 'Sunday' },
+    { value: 'monday', label: 'Monday' },
+    { value: 'tuesday', label: 'Tuesday' },
+    { value: 'wednesday', label: 'Wednesday' },
+    { value: 'thursday', label: 'Thursday' },
+    { value: 'friday', label: 'Friday' },
+    { value: 'saturday', label: 'Saturday' }
   ];
-
-  if (loading) {
-    return (
-      <div className="modal-overlay" onClick={onClose}>
-        <div className="modal large" onClick={e => e.stopPropagation()}>
-          <div className="loading">
-            <div className="spinner"></div>
-            <p>Loading settings...</p>
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal large" onClick={e => e.stopPropagation()}>
         <div className="modal-header">
-          <h2>⚙️ User Settings</h2>
-          <p>Welcome, {user?.firstName || user?.username}!</p>
+          <h2>User Settings</h2>
+          <p>Customize your task manager experience</p>
         </div>
-
+        
         <div className="settings-content">
-          {/* Reset Schedule Settings */}
+          {/* Appearance Settings */}
           <div className="settings-section">
-            <h3>🔄 Reset Schedule</h3>
+            <h3>Appearance</h3>
+            <div className="form-group">
+              <label>Theme</label>
+              <select 
+                value={localSettings.theme} 
+                onChange={(e) => setLocalSettings({...localSettings, theme: e.target.value})}
+              >
+                <option value="light">Light</option>
+                <option value="dark">Dark</option>
+                <option value="system">System</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Task Display Settings */}
+          <div className="settings-section">
+            <h3>Task Display</h3>
+            <div className="form-group">
+              <label>Tasks to show in list previews</label>
+              <input
+                type="number"
+                min="1"
+                max="20"
+                value={localSettings.previewTaskCount}
+                onChange={(e) => setLocalSettings({
+                  ...localSettings, 
+                  previewTaskCount: parseInt(e.target.value) || 5
+                })}
+              />
+              <small>Number of tasks to display in each list preview</small>
+            </div>
             
             <div className="form-group">
               <label className="checkbox-label">
                 <input
                   type="checkbox"
-                  checked={settings.reset_enabled}
-                  onChange={e => setSettings({...settings, reset_enabled: e.target.checked})}
+                  checked={localSettings.showCompletedInPreview}
+                  onChange={(e) => setLocalSettings({
+                    ...localSettings, 
+                    showCompletedInPreview: e.target.checked
+                  })}
+                />
+                Include completed tasks in previews
+              </label>
+            </div>
+          </div>
+
+          {/* Reset Schedule Settings */}
+          <div className="settings-section">
+            <h3>Reset Schedule</h3>
+            <div className="form-group">
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={localSettings.resetEnabled}
+                  onChange={(e) => setLocalSettings({
+                    ...localSettings, 
+                    resetEnabled: e.target.checked
+                  })}
                 />
                 Enable automatic daily reset
               </label>
             </div>
-
-            {settings.reset_enabled && (
-              <>
+            
+            {localSettings.resetEnabled && (
+              <React.Fragment>
                 <div className="form-row">
                   <div className="form-group">
                     <label>Reset Time</label>
                     <input
                       type="time"
-                      value={settings.reset_time}
-                      onChange={e => setSettings({...settings, reset_time: e.target.value})}
+                      value={localSettings.resetTime}
+                      onChange={(e) => setLocalSettings({
+                        ...localSettings, 
+                        resetTime: e.target.value
+                      })}
                     />
                   </div>
                   
                   <div className="form-group">
                     <label>Timezone</label>
                     <select
-                      value={settings.reset_timezone}
-                      onChange={e => setSettings({...settings, reset_timezone: e.target.value})}
+                      value={localSettings.resetTimezone}
+                      onChange={(e) => setLocalSettings({
+                        ...localSettings, 
+                        resetTimezone: e.target.value
+                      })}
                     >
                       {timezones.map(tz => (
                         <option key={tz} value={tz}>{tz}</option>
@@ -165,10 +204,13 @@ const UserSettings = ({ onClose }) => {
                 </div>
 
                 <div className="form-group">
-                  <label>Reset Days</label>
+                  <label>Reset frequency</label>
                   <select
-                    value={settings.reset_days}
-                    onChange={e => setSettings({...settings, reset_days: e.target.value})}
+                    value={localSettings.resetDays}
+                    onChange={(e) => setLocalSettings({
+                      ...localSettings, 
+                      resetDays: e.target.value
+                    })}
                   >
                     <option value="daily">Every day</option>
                     <option value="weekdays">Weekdays only (Mon-Fri)</option>
@@ -177,27 +219,23 @@ const UserSettings = ({ onClose }) => {
                   </select>
                 </div>
 
-                {settings.reset_days === 'custom' && (
+                {localSettings.resetDays === 'custom' && (
                   <div className="form-group">
-                    <label>Custom Days</label>
+                    <label>Select days for reset</label>
                     <div className="weekday-selector">
                       {weekdays.map(day => (
                         <label key={day.value} className="weekday-checkbox">
                           <input
                             type="checkbox"
-                            checked={settings.custom_reset_days.includes(day.value)}
-                            onChange={e => {
-                              if (e.target.checked) {
-                                setSettings({
-                                  ...settings,
-                                  custom_reset_days: [...settings.custom_reset_days, day.value]
-                                });
-                              } else {
-                                setSettings({
-                                  ...settings,
-                                  custom_reset_days: settings.custom_reset_days.filter(d => d !== day.value)
-                                });
-                              }
+                            checked={localSettings.customResetDays.includes(day.value)}
+                            onChange={(e) => {
+                              const newDays = e.target.checked
+                                ? [...localSettings.customResetDays, day.value]
+                                : localSettings.customResetDays.filter(d => d !== day.value);
+                              setLocalSettings({
+                                ...localSettings,
+                                customResetDays: newDays
+                              });
                             }}
                           />
                           {day.label}
@@ -206,48 +244,37 @@ const UserSettings = ({ onClose }) => {
                     </div>
                   </div>
                 )}
-              </>
+
+                <div className="form-group">
+                  <label className="checkbox-label">
+                    <input
+                      type="checkbox"
+                      checked={localSettings.autoCreateTasks}
+                      onChange={(e) => setLocalSettings({
+                        ...localSettings, 
+                        autoCreateTasks: e.target.checked
+                      })}
+                    />
+                    Automatically create daily tasks from templates
+                  </label>
+                </div>
+              </React.Fragment>
             )}
-
-            <div className="form-group">
-              <label className="checkbox-label">
-                <input
-                  type="checkbox"
-                  checked={settings.auto_create_tasks}
-                  onChange={e => setSettings({...settings, auto_create_tasks: e.target.checked})}
-                />
-                Automatically create daily tasks from templates
-              </label>
-            </div>
-          </div>
-
-          {/* Appearance Settings */}
-          <div className="settings-section">
-            <h3>🎨 Appearance</h3>
-            
-            <div className="form-group">
-              <label>Theme</label>
-              <select
-                value={settings.theme}
-                onChange={e => setSettings({...settings, theme: e.target.value})}
-              >
-                <option value="light">Light</option>
-                <option value="dark">Dark</option>
-                <option value="auto">Auto (system preference)</option>
-              </select>
-            </div>
           </div>
 
           {/* Notification Settings */}
           <div className="settings-section">
-            <h3>🔔 Notifications</h3>
+            <h3>Notifications</h3>
             
             <div className="form-group">
               <label className="checkbox-label">
                 <input
                   type="checkbox"
-                  checked={settings.notification_email}
-                  onChange={e => setSettings({...settings, notification_email: e.target.checked})}
+                  checked={localSettings.notificationEmail}
+                  onChange={(e) => setLocalSettings({
+                    ...localSettings, 
+                    notificationEmail: e.target.checked
+                  })}
                 />
                 Email notifications
               </label>
@@ -257,8 +284,11 @@ const UserSettings = ({ onClose }) => {
               <label className="checkbox-label">
                 <input
                   type="checkbox"
-                  checked={settings.notification_browser}
-                  onChange={e => setSettings({...settings, notification_browser: e.target.checked})}
+                  checked={localSettings.notificationBrowser}
+                  onChange={(e) => setLocalSettings({
+                    ...localSettings, 
+                    notificationBrowser: e.target.checked
+                  })}
                 />
                 Browser notifications
               </label>
@@ -267,7 +297,7 @@ const UserSettings = ({ onClose }) => {
 
           {/* Manual Actions */}
           <div className="settings-section">
-            <h3>🔧 Manual Actions</h3>
+            <h3>Manual Actions</h3>
             
             <div className="form-group">
               <button
@@ -275,7 +305,7 @@ const UserSettings = ({ onClose }) => {
                 className="btn btn-secondary"
                 onClick={handleManualReset}
               >
-                🔄 Reset Tasks Now
+                Reset Tasks Now
               </button>
               <small>Create today's tasks immediately (if not already created)</small>
             </div>
@@ -284,25 +314,23 @@ const UserSettings = ({ onClose }) => {
 
         <div className="modal-actions">
           <button 
-            type="button" 
             onClick={onClose} 
             className="btn btn-secondary"
-            disabled={saving}
+            disabled={loading}
           >
             Cancel
           </button>
           <button 
-            type="button" 
             onClick={handleSave} 
             className="btn btn-primary"
-            disabled={saving}
+            disabled={loading}
           >
-            {saving ? 'Saving...' : 'Save Settings'}
+            {loading ? 'Saving...' : 'Save Settings'}
           </button>
         </div>
       </div>
     </div>
   );
-};
+}
 
 export default UserSettings;
