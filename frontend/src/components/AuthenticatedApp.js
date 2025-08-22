@@ -433,6 +433,7 @@ function AuthenticatedApp() {
         />
       )}
     </div>
-);
+  );
+}
 
 export default AuthenticatedApp;
