@@ -1,5 +1,9 @@
 FROM node:18-alpine
 
+LABEL maintainer="coldforge" \
+      version="1.0.0" \
+      description="Ritual Forge Backend API"
+
 WORKDIR /app
 
 # Install dependencies first (better caching)
