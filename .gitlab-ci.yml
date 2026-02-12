@@ -1,104 +1,74 @@
 stages:
   - build
-  - deploy
 
 variables:
-  REGISTRY: registry.coldforge.xyz/prod-images/ritual-forge
-  NAMESPACE: task-manager
-  IMAGE_TAG: $CI_COMMIT_SHORT_SHA
+  # Harbor registry configuration
+  HARBOR_REGISTRY: oci.coldforge.xyz
+  HARBOR_USER: "robot$atlas"
+  # HARBOR_PASSWORD is set in GitLab CI/CD settings
 
-# Build template
-.build_template: &build_template
-  stage: build
-  image:
-    name: gcr.io/kaniko-project/executor:v1.23.2-debug
-    entrypoint: [""]
-  script:
-    - |
-      echo "{\"auths\":{\"registry.coldforge.xyz\":{\"auth\":\"$(printf "%s:%s" "${CI_REGISTRY_USER:-gitlab-ci-token}" "${CI_REGISTRY_PASSWORD:-$CI_JOB_TOKEN}" | base64 | tr -d '\n')\"}}}" > /kaniko/.docker/config.json
-    - |
-      /kaniko/executor \
-        --context "${CI_PROJECT_DIR}/${BUILD_CONTEXT}" \
-        --dockerfile "${CI_PROJECT_DIR}/${BUILD_CONTEXT}/Dockerfile" \
-        --destination "${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}" \
-        --destination "${REGISTRY}/${IMAGE_NAME}:latest"
-
-# Deploy template
-.deploy_template: &deploy_template
-  stage: deploy
-  image: registry.redhat.io/openshift4/ose-cli:latest
-  before_script:
-    - oc login --token=$OPENSHIFT_TOKEN --server=$OPENSHIFT_SERVER --insecure-skip-tls-verify=true
+  # Image paths
+  BACKEND_IMAGE: ${HARBOR_REGISTRY}/coldforge/ritual-forge-backend
+  FRONTEND_IMAGE: ${HARBOR_REGISTRY}/coldforge/ritual-forge-frontend
 
 # =============================================================================
-# BACKEND
+# BUILD JOBS
 # =============================================================================
+
 build-backend:
-  <<: *build_template
+  stage: build
+  image: docker:latest
+  services:
+    - docker:dind
   variables:
-    BUILD_CONTEXT: backend
-    IMAGE_NAME: backend
-  rules:
-    - if: '$CI_COMMIT_BRANCH == "master" || $CI_COMMIT_BRANCH == "main"'
-      changes:
-        - backend/**/*
-
-deploy-backend:
-  <<: *deploy_template
-  needs: ["build-backend"]
+    DOCKER_TLS_CERTDIR: "/certs"
+  before_script:
+    - docker login -u ${HARBOR_USER} -p ${HARBOR_PASSWORD} ${HARBOR_REGISTRY}
   script:
-    - oc set image deployment/backend backend=${REGISTRY}/backend:${IMAGE_TAG} -n $NAMESPACE
-    - oc rollout status deployment/backend -n $NAMESPACE --timeout=5m
+    - docker build -t ${BACKEND_IMAGE}:${CI_COMMIT_SHA} -t ${BACKEND_IMAGE}:latest ./backend
+    - docker push ${BACKEND_IMAGE}:${CI_COMMIT_SHA}
+    - docker push ${BACKEND_IMAGE}:latest
   rules:
     - if: '$CI_COMMIT_BRANCH == "master" || $CI_COMMIT_BRANCH == "main"'
       changes:
         - backend/**/*
 
-# =============================================================================
-# FRONTEND
-# =============================================================================
 build-frontend:
-  <<: *build_template
+  stage: build
+  image: docker:latest
+  services:
+    - docker:dind
   variables:
-    BUILD_CONTEXT: frontend
-    IMAGE_NAME: frontend
-  rules:
-    - if: '$CI_COMMIT_BRANCH == "master" || $CI_COMMIT_BRANCH == "main"'
-      changes:
-        - frontend/**/*
-
-deploy-frontend:
-  <<: *deploy_template
-  needs: ["build-frontend"]
+    DOCKER_TLS_CERTDIR: "/certs"
+  before_script:
+    - docker login -u ${HARBOR_USER} -p ${HARBOR_PASSWORD} ${HARBOR_REGISTRY}
   script:
-    - oc set image deployment/frontend frontend=${REGISTRY}/frontend:${IMAGE_TAG} -n $NAMESPACE
-    - oc rollout status deployment/frontend -n $NAMESPACE --timeout=5m
+    - docker build -t ${FRONTEND_IMAGE}:${CI_COMMIT_SHA} -t ${FRONTEND_IMAGE}:latest ./frontend
+    - docker push ${FRONTEND_IMAGE}:${CI_COMMIT_SHA}
+    - docker push ${FRONTEND_IMAGE}:latest
   rules:
     - if: '$CI_COMMIT_BRANCH == "master" || $CI_COMMIT_BRANCH == "main"'
       changes:
         - frontend/**/*
 
-# =============================================================================
-# BUILD ALL - Manual trigger to rebuild everything
-# =============================================================================
+# Build all - runs on any commit to master/main
 build-all:
   stage: build
-  image:
-    name: gcr.io/kaniko-project/executor:v1.23.2-debug
-    entrypoint: [""]
+  image: docker:latest
+  services:
+    - docker:dind
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+  before_script:
+    - docker login -u ${HARBOR_USER} -p ${HARBOR_PASSWORD} ${HARBOR_REGISTRY}
   script:
-    - |
-      echo "{\"auths\":{\"registry.coldforge.xyz\":{\"auth\":\"$(printf "%s:%s" "${CI_REGISTRY_USER:-gitlab-ci-token}" "${CI_REGISTRY_PASSWORD:-$CI_JOB_TOKEN}" | base64 | tr -d '\n')\"}}}" > /kaniko/.docker/config.json
-    - |
-      for service in backend frontend; do
-        echo "Building ${service}..."
-        /kaniko/executor \
-          --context "${CI_PROJECT_DIR}/${service}" \
-          --dockerfile "${CI_PROJECT_DIR}/${service}/Dockerfile" \
-          --destination "${REGISTRY}/${service}:${IMAGE_TAG}" \
-          --destination "${REGISTRY}/${service}:latest" \
-          --cleanup
-      done
+    - echo "Building backend..."
+    - docker build -t ${BACKEND_IMAGE}:${CI_COMMIT_SHA} -t ${BACKEND_IMAGE}:latest ./backend
+    - docker push ${BACKEND_IMAGE}:${CI_COMMIT_SHA}
+    - docker push ${BACKEND_IMAGE}:latest
+    - echo "Building frontend..."
+    - docker build -t ${FRONTEND_IMAGE}:${CI_COMMIT_SHA} -t ${FRONTEND_IMAGE}:latest ./frontend
+    - docker push ${FRONTEND_IMAGE}:${CI_COMMIT_SHA}
+    - docker push ${FRONTEND_IMAGE}:latest
   rules:
     - if: '$CI_COMMIT_BRANCH == "master" || $CI_COMMIT_BRANCH == "main"'
-      when: manual
