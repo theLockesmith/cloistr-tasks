@@ -2,14 +2,9 @@ stages:
   - build
 
 variables:
-  # Harbor registry configuration
-  HARBOR_REGISTRY: oci.coldforge.xyz
-  HARBOR_USER: "robot$atlas"
-  # HARBOR_PASSWORD is set in GitLab CI/CD settings
-
-  # Image paths
-  BACKEND_IMAGE: ${HARBOR_REGISTRY}/coldforge/ritual-forge-backend
-  FRONTEND_IMAGE: ${HARBOR_REGISTRY}/coldforge/ritual-forge-frontend
+  # GitLab Container Registry
+  REGISTRY: ${CI_REGISTRY}
+  IMAGE_PATH: ${CI_REGISTRY_IMAGE}
 
 # =============================================================================
 # BUILD JOBS
@@ -23,11 +18,11 @@ build-backend:
   variables:
     DOCKER_TLS_CERTDIR: "/certs"
   before_script:
-    - docker login -u ${HARBOR_USER} -p ${HARBOR_PASSWORD} ${HARBOR_REGISTRY}
+    - docker login -u ${CI_REGISTRY_USER} -p ${CI_REGISTRY_PASSWORD} ${CI_REGISTRY}
   script:
-    - docker build -t ${BACKEND_IMAGE}:${CI_COMMIT_SHA} -t ${BACKEND_IMAGE}:latest ./backend
-    - docker push ${BACKEND_IMAGE}:${CI_COMMIT_SHA}
-    - docker push ${BACKEND_IMAGE}:latest
+    - docker build -t ${IMAGE_PATH}/backend:${CI_COMMIT_SHA} -t ${IMAGE_PATH}/backend:latest ./backend
+    - docker push ${IMAGE_PATH}/backend:${CI_COMMIT_SHA}
+    - docker push ${IMAGE_PATH}/backend:latest
   rules:
     - if: '$CI_COMMIT_BRANCH == "master" || $CI_COMMIT_BRANCH == "main"'
       changes:
@@ -41,11 +36,11 @@ build-frontend:
   variables:
     DOCKER_TLS_CERTDIR: "/certs"
   before_script:
-    - docker login -u ${HARBOR_USER} -p ${HARBOR_PASSWORD} ${HARBOR_REGISTRY}
+    - docker login -u ${CI_REGISTRY_USER} -p ${CI_REGISTRY_PASSWORD} ${CI_REGISTRY}
   script:
-    - docker build -t ${FRONTEND_IMAGE}:${CI_COMMIT_SHA} -t ${FRONTEND_IMAGE}:latest ./frontend
-    - docker push ${FRONTEND_IMAGE}:${CI_COMMIT_SHA}
-    - docker push ${FRONTEND_IMAGE}:latest
+    - docker build -t ${IMAGE_PATH}/frontend:${CI_COMMIT_SHA} -t ${IMAGE_PATH}/frontend:latest ./frontend
+    - docker push ${IMAGE_PATH}/frontend:${CI_COMMIT_SHA}
+    - docker push ${IMAGE_PATH}/frontend:latest
   rules:
     - if: '$CI_COMMIT_BRANCH == "master" || $CI_COMMIT_BRANCH == "main"'
       changes:
@@ -60,15 +55,15 @@ build-all:
   variables:
     DOCKER_TLS_CERTDIR: "/certs"
   before_script:
-    - docker login -u ${HARBOR_USER} -p ${HARBOR_PASSWORD} ${HARBOR_REGISTRY}
+    - docker login -u ${CI_REGISTRY_USER} -p ${CI_REGISTRY_PASSWORD} ${CI_REGISTRY}
   script:
     - echo "Building backend..."
-    - docker build -t ${BACKEND_IMAGE}:${CI_COMMIT_SHA} -t ${BACKEND_IMAGE}:latest ./backend
-    - docker push ${BACKEND_IMAGE}:${CI_COMMIT_SHA}
-    - docker push ${BACKEND_IMAGE}:latest
+    - docker build -t ${IMAGE_PATH}/backend:${CI_COMMIT_SHA} -t ${IMAGE_PATH}/backend:latest ./backend
+    - docker push ${IMAGE_PATH}/backend:${CI_COMMIT_SHA}
+    - docker push ${IMAGE_PATH}/backend:latest
     - echo "Building frontend..."
-    - docker build -t ${FRONTEND_IMAGE}:${CI_COMMIT_SHA} -t ${FRONTEND_IMAGE}:latest ./frontend
-    - docker push ${FRONTEND_IMAGE}:${CI_COMMIT_SHA}
-    - docker push ${FRONTEND_IMAGE}:latest
+    - docker build -t ${IMAGE_PATH}/frontend:${CI_COMMIT_SHA} -t ${IMAGE_PATH}/frontend:latest ./frontend
+    - docker push ${IMAGE_PATH}/frontend:${CI_COMMIT_SHA}
+    - docker push ${IMAGE_PATH}/frontend:latest
   rules:
     - if: '$CI_COMMIT_BRANCH == "master" || $CI_COMMIT_BRANCH == "main"'
