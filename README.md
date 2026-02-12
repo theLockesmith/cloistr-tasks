@@ -121,18 +121,38 @@ The application expects these backend endpoints:
 - Proper loading states
 - Form validation
 
-## Future Enhancements
+## Roadmap
+
+### Phase 1: Nostr Authentication (Replace Keycloak)
+
+Replace Keycloak OAuth with Nostr-native authentication:
+
+- [ ] **NIP-07** - Browser extension signing (nos2x, Alby, etc.)
+- [ ] **NIP-46** - Remote signing (nsecbunker integration)
+- [ ] **NIP-55** - Android signer intents (Amber) - if native app
+- [ ] NIP-19 - Bech32 identifier encoding (npub display)
+- [ ] Remove Keycloak dependency entirely
+
+### Phase 2: Core Features
 
 - [ ] Task completion tracking
 - [ ] Due date management
 - [ ] Task priority levels
 - [ ] Drag-and-drop reordering
-- [ ] Calendar integration
-- [ ] Mobile app companion
-- [ ] Team collaboration features
-- [ ] Data export/import
 - [ ] Advanced filtering and search
+
+### Phase 3: Enhanced Features
+
+- [ ] Calendar integration
 - [ ] Notification system
+- [ ] Data export/import
+- [ ] Mobile app companion (consider NIP-55 for Android)
+
+### Non-Goals
+
+- **Nostr event storage** - Tasks remain in traditional storage (local/backend), not published as Nostr events
+- **Hybrid publishing** - No "post task to relay" features; use a Nostr client directly for that
+- **Custodial key storage** - App never touches nsec; external signers handle keys
 
 ## Contributing
 
