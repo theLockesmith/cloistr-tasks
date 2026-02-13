@@ -6,9 +6,15 @@ LABEL maintainer="coldforge" \
 
 WORKDIR /app
 
+# Install build dependencies for native modules (bcrypt)
+RUN apk add --no-cache python3 make g++
+
 # Install dependencies first (better caching)
 COPY package*.json ./
-RUN npm ci --only=production
+RUN npm ci --omit=dev
+
+# Remove build dependencies to reduce image size
+RUN apk del python3 make g++
 
 # Copy application code
 COPY . .
