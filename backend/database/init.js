@@ -1,9 +1,16 @@
 // backend/database/init.js
 // Database initialization and migration system
 
-const { Pool } = require('pg');
-const fs = require('fs');
-const path = require('path');
+import pg from 'pg';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const { Pool } = pg;
+
+// Get __dirname equivalent for ESM
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Database connection configuration
 const createPool = (dbName = 'postgres') => {
@@ -55,9 +62,9 @@ async function createDatabase(dbName) {
 async function tablesExist(pool) {
   try {
     const result = await pool.query(`
-      SELECT table_name 
-      FROM information_schema.tables 
-      WHERE table_schema = 'public' 
+      SELECT table_name
+      FROM information_schema.tables
+      WHERE table_schema = 'public'
       AND table_name IN ('task_lists', 'task_templates', 'tasks')
     `);
     return result.rows.length === 3;
@@ -92,7 +99,7 @@ async function runMigrations(pool) {
     `);
 
     const migrationsDir = path.join(__dirname, 'migrations');
-    
+
     if (!fs.existsSync(migrationsDir)) {
       console.log('ℹ️  No migrations directory found, skipping migrations');
       return;
@@ -112,7 +119,7 @@ async function runMigrations(pool) {
       if (result.rows.length === 0) {
         console.log(`🔄 Running migration: ${file}`);
         await executeSQLFile(pool, path.join(migrationsDir, file));
-        
+
         // Record migration as executed
         await pool.query(
           'INSERT INTO migrations (filename) VALUES ($1)',
@@ -165,7 +172,7 @@ async function insertSampleData(pool) {
       ($1, 'Check web scraping', 'Verify scraping jobs completed successfully', '9:00', 10, 3),
       ($1, 'Review overnight alerts', 'Check monitoring dashboards for any issues', '9:05', 15, 4),
       ($1, 'Plan daily priorities', 'Set top 3 goals for the day', '9:15', 10, 5),
-      
+
       -- Work Tasks
       ($2, 'Review monitoring dashboards', 'Check system health across all services', 'morning', 20, 1),
       ($2, 'Check Kubernetes cluster health', 'Verify all pods and services are running', 'morning', 15, 2),
@@ -174,7 +181,7 @@ async function insertSampleData(pool) {
       ($2, 'Check CI/CD pipeline status', 'Review build and deployment pipelines', 'afternoon', 10, 5),
       ($2, 'Update project documentation', 'Keep docs current with recent changes', 'afternoon', 30, 6),
       ($2, 'Review security alerts', 'Check for any security notifications', 'afternoon', 15, 7),
-      
+
       -- Evening Routine
       ($3, 'Archive completed work', 'Clean up workspace and organize files', 'evening', 15, 1),
       ($3, 'Plan tomorrow priorities', 'Set agenda for next day', 'evening', 10, 2),
@@ -194,7 +201,7 @@ async function insertSampleData(pool) {
 // Main initialization function
 async function initializeDatabase() {
   const dbName = process.env.DB_NAME || 'taskmanager';
-  
+
   console.log('🚀 Starting database initialization...');
   console.log(`📊 Target database: ${dbName}`);
 
@@ -213,7 +220,7 @@ async function initializeDatabase() {
 
     // Step 3: Check if tables exist
     const hastables = await tablesExist(pool);
-    
+
     if (!hastables) {
       console.log('📋 Creating initial schema...');
       // Execute the initial schema
@@ -231,7 +238,7 @@ async function initializeDatabase() {
 
     // Step 6: Verify setup
     const verification = await pool.query(`
-      SELECT 
+      SELECT
         (SELECT COUNT(*) FROM task_lists) as lists_count,
         (SELECT COUNT(*) FROM task_templates) as templates_count,
         (SELECT COUNT(*) FROM tasks) as tasks_count
@@ -252,13 +259,19 @@ async function initializeDatabase() {
 }
 
 // Export for use in server.js
-module.exports = {
+export {
   initializeDatabase,
-  createPool: () => createPool(process.env.DB_NAME || 'taskmanager')
+  createPool
 };
 
+// Named export function that returns pool with configured DB name
+const createAppPool = () => createPool(process.env.DB_NAME || 'taskmanager');
+export { createAppPool };
+
 // Run initialization if this file is executed directly
-if (require.main === module) {
+// In ESM, check if this is the main module
+const isMainModule = import.meta.url === `file://${process.argv[1]}`;
+if (isMainModule) {
   initializeDatabase()
     .then(() => {
       console.log('🎉 Database initialization completed successfully!');

@@ -5,7 +5,7 @@ WORKDIR /app
 
 # Install dependencies first (better caching)
 COPY package*.json ./
-RUN npm ci
+RUN npm ci --legacy-peer-deps
 
 # Copy source and build
 COPY . .
@@ -17,10 +17,18 @@ FROM nginxinc/nginx-unprivileged:alpine
 # Copy built assets
 COPY --from=build /app/build /usr/share/nginx/html
 
-# Copy nginx config for SPA routing (non-root, port 8080)
+# Copy nginx config for SPA routing + API proxy (non-root, port 8080)
 USER root
 RUN echo 'server { \
     listen 8080; \
+    location /api/ { \
+        proxy_pass http://ritual-forge-backend-service.coldforge-tasks.svc.cluster.local:3000/api/; \
+        proxy_http_version 1.1; \
+        proxy_set_header Host $host; \
+        proxy_set_header X-Real-IP $remote_addr; \
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; \
+        proxy_set_header X-Forwarded-Proto $scheme; \
+    } \
     location / { \
         root /usr/share/nginx/html; \
         index index.html; \

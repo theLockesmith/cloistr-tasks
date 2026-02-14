@@ -1,12 +1,19 @@
-// backend/server.js - Complete Task Manager Backend with Keycloak Authentication
-const express = require('express');
-const cors = require('cors');
-const helmet = require('helmet');
-const morgan = require('morgan');
-require('dotenv').config();
+// backend/server.js - Task Manager Backend with Nostr Authentication
+import express from 'express';
+import cors from 'cors';
+import helmet from 'helmet';
+import morgan from 'morgan';
+import crypto from 'crypto';
+import dotenv from 'dotenv';
 
-const { initializeDatabase, createPool } = require('./database/init');
-const { authenticateToken, optionalAuth, requireOwnership } = require('./middleware/auth');
+import { initializeDatabase, createPool, createAppPool } from './database/init.js';
+import { authenticateToken, optionalAuth, requireOwnership, issueJWT } from './middleware/auth.js';
+
+// Import nostr-tools for signature verification
+import { verifyEvent, getPublicKey } from 'nostr-tools/pure';
+import { nip19 } from 'nostr-tools';
+
+dotenv.config();
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -20,35 +27,46 @@ app.use(cors());
 app.use(morgan('combined'));
 app.use(express.json());
 
-// User sync/creation function
+// User sync/creation function for Nostr users
 async function syncUser(userInfo) {
   try {
-    console.log('Syncing user:', userInfo.id, typeof userInfo.id); // Debug line
-    
-    // Upsert user
+    const pubkey = userInfo.pubkey || userInfo.id;
+    console.log('Syncing Nostr user:', pubkey);
+
+    // Upsert user using pubkey as primary identifier
     await pool.query(`
-      INSERT INTO users (id, email, username, first_name, last_name, last_login)
-      VALUES ($1, $2, $3, $4, $5, NOW())
+      INSERT INTO users (id, pubkey, email, username, first_name, last_name, last_login)
+      VALUES ($1, $1, $2, $3, $4, $5, NOW())
       ON CONFLICT (id) DO UPDATE SET
-        email = EXCLUDED.email,
-        username = EXCLUDED.username,
-        first_name = EXCLUDED.first_name,
-        last_name = EXCLUDED.last_name,
+        pubkey = COALESCE(EXCLUDED.pubkey, users.pubkey),
+        email = COALESCE(EXCLUDED.email, users.email),
+        username = COALESCE(EXCLUDED.username, users.username),
+        first_name = COALESCE(EXCLUDED.first_name, users.first_name),
+        last_name = COALESCE(EXCLUDED.last_name, users.last_name),
         last_login = NOW(),
         updated_at = NOW()
-    `, [userInfo.id, userInfo.email, userInfo.username, userInfo.firstName, userInfo.lastName]);
+    `, [pubkey, userInfo.email || null, userInfo.username || null, userInfo.firstName || null, userInfo.lastName || null]);
 
     // Create default user settings if they don't exist
     await pool.query(`
       INSERT INTO user_settings (user_id)
       VALUES ($1)
       ON CONFLICT (user_id) DO NOTHING
-    `, [userInfo.id]);
+    `, [pubkey]);
 
     return true;
   } catch (error) {
     console.error('Error syncing user:', error);
     return false;
+  }
+}
+
+// Format pubkey as npub for display
+function formatPubkeyAsNpub(pubkey) {
+  try {
+    return nip19.npubEncode(pubkey);
+  } catch (error) {
+    return pubkey.substring(0, 8) + '...' + pubkey.substring(pubkey.length - 4);
   }
 }
 
@@ -61,7 +79,7 @@ async function startServer() {
     await initializeDatabase();
     
     // Create database connection pool
-    pool = createPool();
+    pool = createAppPool();
     
     console.log('✅ Database connection established');
     
@@ -69,7 +87,7 @@ async function startServer() {
     app.listen(port, () => {
       console.log(`🎉 Task Manager API running on port ${port}`);
       console.log(`📊 Health check: http://localhost:${port}/health`);
-      console.log(`🔐 Keycloak URL: ${process.env.KEYCLOAK_URL || 'Not configured'}`);
+      console.log(`🔐 Auth: Nostr (NIP-07/NIP-46)`);
     });
     
   } catch (error) {
@@ -83,15 +101,15 @@ app.get('/health', async (req, res) => {
   try {
     // Test database connection
     await pool.query('SELECT 1');
-    res.json({ 
-      status: 'ok', 
+    res.json({
+      status: 'ok',
       timestamp: new Date().toISOString(),
       database: 'connected',
-      auth: process.env.KEYCLOAK_URL ? 'keycloak' : 'disabled'
+      auth: 'nostr'
     });
   } catch (error) {
-    res.status(500).json({ 
-      status: 'error', 
+    res.status(500).json({
+      status: 'error',
       timestamp: new Date().toISOString(),
       database: 'disconnected',
       error: error.message
@@ -99,299 +117,169 @@ app.get('/health', async (req, res) => {
   }
 });
 
-// Keycloak configuration endpoint (for frontend)
+// Nostr auth configuration endpoint (for frontend)
 app.get('/api/auth/config', (req, res) => {
   res.json({
-    keycloak_url: process.env.KEYCLOAK_URL || 'http://localhost:8080',
-    realm: process.env.KEYCLOAK_REALM || 'master',
-    client_id: process.env.KEYCLOAK_CLIENT_ID || 'task-manager',
-    auth_url: `${process.env.KEYCLOAK_URL || 'http://localhost:8080'}/realms/${process.env.KEYCLOAK_REALM || 'master'}/protocol/openid-connect/auth`,
-    token_url: `${process.env.KEYCLOAK_URL || 'http://localhost:8080'}/realms/${process.env.KEYCLOAK_REALM || 'master'}/protocol/openid-connect/token`,
-    logout_url: `${process.env.KEYCLOAK_URL || 'http://localhost:8080'}/realms/${process.env.KEYCLOAK_REALM || 'master'}/protocol/openid-connect/logout`
+    auth_type: 'nostr',
+    supported_nips: ['NIP-07', 'NIP-46'],
+    challenge_endpoint: '/api/auth/challenge',
+    verify_endpoint: '/api/auth/verify'
   });
 });
 
-// Authentication endpoint
-app.post('/api/auth/login', optionalAuth, async (req, res) => {
-  if (!req.user) {
-    return res.status(401).json({ 
-      error: 'Invalid token',
-      keycloak_url: `${process.env.KEYCLOAK_URL}/realms/${process.env.KEYCLOAK_REALM}/protocol/openid-connect/auth`
-    });
-  }
-
-  // Sync user to database
-  const synced = await syncUser(req.user);
-  if (!synced) {
-    return res.status(500).json({ error: 'Failed to sync user data' });
-  }
-
-  res.json({
-    user: req.user,
-    message: 'Login successful'
-  });
-});
-
-// Backend token exchange endpoint - handles OAuth callback
-app.post('/api/auth/callback', async (req, res) => {
+// Generate authentication challenge
+app.get('/api/auth/challenge', async (req, res) => {
   try {
-    const { code, state, redirect_uri } = req.body;
-    
-    if (!code || !state) {
-      return res.status(400).json({ error: 'Missing code or state parameter' });
-    }
-    
-    console.log('Backend token exchange starting for code:', code.substring(0, 8) + '...');
-    const startTime = Date.now();
-    
-    // Prepare token exchange request
-    const tokenUrl = `${process.env.KEYCLOAK_URL}/realms/${process.env.KEYCLOAK_REALM}/protocol/openid-connect/token`;
-    
-    const requestBody = new URLSearchParams({
-      grant_type: 'authorization_code',
-      client_id: process.env.KEYCLOAK_CLIENT_ID,
-      code: code,
-      redirect_uri: redirect_uri || 'https://tasks.coldforge.xyz'
+    // Generate random challenge
+    const challenge = crypto.randomBytes(32).toString('hex');
+    const nonce = crypto.randomBytes(16).toString('hex');
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
+
+    // Store challenge in database
+    await pool.query(`
+      INSERT INTO auth_challenges (challenge, nonce, expires_at)
+      VALUES ($1, $2, $3)
+    `, [challenge, nonce, expiresAt]);
+
+    // Clean up old challenges
+    await pool.query(`
+      DELETE FROM auth_challenges
+      WHERE expires_at < NOW() OR (used = true AND used_at < NOW() - INTERVAL '1 hour')
+    `);
+
+    res.json({
+      challenge,
+      nonce,
+      expires_at: expiresAt.toISOString()
     });
+  } catch (error) {
+    console.error('Error generating challenge:', error);
+    res.status(500).json({ error: 'Failed to generate challenge' });
+  }
+});
 
-    // Add client secret if available
-    if (process.env.KEYCLOAK_CLIENT_SECRET) {
-      requestBody.append('client_secret', process.env.KEYCLOAK_CLIENT_SECRET);
+// Verify signed Nostr event and issue JWT
+app.post('/api/auth/verify', async (req, res) => {
+  try {
+    const { signedEvent } = req.body;
+
+    if (!signedEvent) {
+      return res.status(400).json({ error: 'Signed event required' });
     }
 
-    console.log('Exchanging token with Keycloak at:', tokenUrl);
-
-    // Exchange authorization code for access token
-    const tokenResponse = await fetch(tokenUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: requestBody,
-    });
-
-    const elapsed = Date.now() - startTime;
-    console.log(`Keycloak token response: ${tokenResponse.status} (${elapsed}ms elapsed)`);
-
-    if (!tokenResponse.ok) {
-      const errorText = await tokenResponse.text();
-      console.error('Keycloak token exchange error:', errorText);
-      
-      try {
-        const errorData = JSON.parse(errorText);
-        return res.status(400).json({ 
-          error: 'Token exchange failed', 
-          details: errorData 
-        });
-      } catch (e) {
-        return res.status(400).json({ 
-          error: 'Token exchange failed', 
-          details: errorText 
-        });
-      }
+    // Validate event structure
+    if (!signedEvent.pubkey || !signedEvent.sig || !signedEvent.content) {
+      return res.status(400).json({ error: 'Invalid event structure' });
     }
 
-    const tokenData = await tokenResponse.json();
-    const accessToken = tokenData.access_token;
-    const refreshToken = tokenData.refresh_token; // Get refresh token
-    const expiresIn = tokenData.expires_in; // Get expiration time
-    
-    console.log('Token exchange successful, access token expires in:', expiresIn, 'seconds');
-    console.log('Refresh token available:', !!refreshToken);
-
-    // Validate the token and get user info
-    const userInfoUrl = `${process.env.KEYCLOAK_URL}/realms/${process.env.KEYCLOAK_REALM}/protocol/openid-connect/userinfo`;
-    
-    const userResponse = await fetch(userInfoUrl, {
-      headers: {
-        'Authorization': `Bearer ${accessToken}`
-      }
-    });
-
-    if (!userResponse.ok) {
-      console.error('Failed to get user info from token');
-      return res.status(400).json({ error: 'Invalid token received' });
+    // Verify Nostr signature
+    const isValidSignature = verifyEvent(signedEvent);
+    if (!isValidSignature) {
+      return res.status(401).json({ error: 'Invalid signature' });
     }
 
-    const keycloakUser = await userResponse.json();
-    
-    // Transform Keycloak user to our format
+    // Parse challenge from event content
+    let challengeData;
+    try {
+      challengeData = JSON.parse(signedEvent.content);
+    } catch (e) {
+      return res.status(400).json({ error: 'Invalid challenge format' });
+    }
+
+    const { challenge, nonce } = challengeData;
+
+    if (!challenge || !nonce) {
+      return res.status(400).json({ error: 'Missing challenge or nonce' });
+    }
+
+    // Verify challenge exists and is valid
+    const challengeResult = await pool.query(`
+      SELECT * FROM auth_challenges
+      WHERE challenge = $1 AND nonce = $2 AND used = false AND expires_at > NOW()
+    `, [challenge, nonce]);
+
+    if (challengeResult.rows.length === 0) {
+      return res.status(401).json({ error: 'Invalid or expired challenge' });
+    }
+
+    // Mark challenge as used
+    await pool.query(`
+      UPDATE auth_challenges
+      SET used = true, used_by = $1, used_at = NOW()
+      WHERE challenge = $2
+    `, [signedEvent.pubkey, challenge]);
+
+    // Create or update user
     const userInfo = {
-      id: keycloakUser.sub,
-      email: keycloakUser.email,
-      username: keycloakUser.preferred_username,
-      firstName: keycloakUser.given_name,
-      lastName: keycloakUser.family_name,
-      roles: keycloakUser.realm_access?.roles || []
+      pubkey: signedEvent.pubkey,
+      id: signedEvent.pubkey
     };
 
-    console.log('User validated:', userInfo.username);
-
-    // Sync user to database
     const synced = await syncUser(userInfo);
     if (!synced) {
-      console.error('Failed to sync user to database');
       return res.status(500).json({ error: 'Failed to sync user data' });
     }
 
-    // Calculate expiration timestamp
-    const expiresAt = new Date(Date.now() + (expiresIn * 1000)).toISOString();
+    // Issue JWT
+    const { token, expiresAt, expiresIn } = issueJWT(signedEvent.pubkey);
 
-    // Return comprehensive token data to frontend
+    console.log('Nostr auth successful for pubkey:', signedEvent.pubkey.substring(0, 8) + '...');
+
     res.json({
-      access_token: accessToken,
-      refresh_token: refreshToken,
+      access_token: token,
       token_type: 'Bearer',
       expires_in: expiresIn,
       expires_at: expiresAt,
-      user: userInfo,
+      user: {
+        id: signedEvent.pubkey,
+        pubkey: signedEvent.pubkey,
+        npub: formatPubkeyAsNpub(signedEvent.pubkey)
+      },
       message: 'Authentication successful'
     });
 
   } catch (error) {
-    console.error('Backend token exchange error:', error);
-    res.status(500).json({ 
-      error: 'Internal server error during token exchange',
-      details: error.message 
+    console.error('Nostr auth verification error:', error);
+    res.status(500).json({
+      error: 'Internal server error during verification',
+      details: error.message
     });
   }
 });
 
-// NEW: Token refresh endpoint
-app.post('/api/auth/refresh', async (req, res) => {
+// Token refresh endpoint (re-issue JWT)
+app.post('/api/auth/refresh', authenticateToken, async (req, res) => {
   try {
-    const { refresh_token } = req.body;
-    
-    if (!refresh_token) {
-      return res.status(400).json({ 
-        error: 'Refresh token required',
-        action: 'login_required'
-      });
-    }
-    
-    console.log('Attempting token refresh...');
-    const startTime = Date.now();
-    
-    const tokenUrl = `${process.env.KEYCLOAK_URL}/realms/${process.env.KEYCLOAK_REALM}/protocol/openid-connect/token`;
-    
-    const requestBody = new URLSearchParams({
-      grant_type: 'refresh_token',
-      client_id: process.env.KEYCLOAK_CLIENT_ID,
-      refresh_token: refresh_token
+    // User is already authenticated via middleware
+    const { token, expiresAt, expiresIn } = issueJWT(req.user.pubkey, {
+      username: req.user.username,
+      email: req.user.email
     });
 
-    // Add client secret if available
-    if (process.env.KEYCLOAK_CLIENT_SECRET) {
-      requestBody.append('client_secret', process.env.KEYCLOAK_CLIENT_SECRET);
-    }
-
-    const tokenResponse = await fetch(tokenUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: requestBody,
-    });
-
-    const elapsed = Date.now() - startTime;
-    console.log(`Token refresh response: ${tokenResponse.status} (${elapsed}ms elapsed)`);
-
-    if (!tokenResponse.ok) {
-      const errorText = await tokenResponse.text();
-      console.error('Token refresh failed:', errorText);
-      
-      // Parse error details
-      let errorDetails;
-      try {
-        errorDetails = JSON.parse(errorText);
-      } catch (e) {
-        errorDetails = { error: errorText };
-      }
-      
-      // Check if refresh token is invalid/expired
-      if (errorDetails.error === 'invalid_grant' || tokenResponse.status === 400) {
-        return res.status(401).json({ 
-          error: 'Refresh token invalid or expired',
-          action: 'login_required',
-          details: errorDetails
-        });
-      }
-      
-      return res.status(500).json({ 
-        error: 'Token refresh failed',
-        details: errorDetails
-      });
-    }
-
-    const tokenData = await tokenResponse.json();
-    const newAccessToken = tokenData.access_token;
-    const newRefreshToken = tokenData.refresh_token || refresh_token; // Some configs don't rotate refresh tokens
-    const expiresIn = tokenData.expires_in;
-    
-    // Calculate expiration timestamp
-    const expiresAt = new Date(Date.now() + (expiresIn * 1000)).toISOString();
-    
-    console.log('Token refresh successful, new token expires in:', expiresIn, 'seconds');
-    
     res.json({
-      access_token: newAccessToken,
-      refresh_token: newRefreshToken,
+      access_token: token,
       token_type: 'Bearer',
       expires_in: expiresIn,
       expires_at: expiresAt,
       message: 'Token refreshed successfully'
     });
-
   } catch (error) {
     console.error('Token refresh error:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Internal server error during token refresh',
-      details: error.message 
+      details: error.message
     });
   }
 });
 
-// Enhanced authentication middleware with refresh token awareness
-const authenticateTokenWithRefresh = async (req, res, next) => {
-  try {
-    const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
-
-    if (!token) {
-      return res.status(401).json({ 
-        error: 'Access token required',
-        action: 'login_required'
-      });
-    }
-
-    // Validate token with Keycloak
-    const user = await validateTokenWithKeycloak(token);
-    
-    if (!user) {
-      // Token is invalid/expired
-      return res.status(401).json({ 
-        error: 'Token expired or invalid',
-        action: 'refresh_required'
-      });
-    }
-
-    // Add user to request object
-    req.user = user;
-    next();
-  } catch (error) {
-    console.error('Token verification failed:', error);
-    return res.status(500).json({ 
-      error: 'Token verification failed',
-      details: error.message 
-    });
-  }
-};
-
-// Optional: Add token introspection endpoint for debugging
-app.get('/api/auth/token-info', authenticateTokenWithRefresh, async (req, res) => {
+// Token info endpoint
+app.get('/api/auth/token-info', authenticateToken, async (req, res) => {
   try {
     res.json({
-      user: req.user,
+      user: {
+        ...req.user,
+        npub: formatPubkeyAsNpub(req.user.pubkey)
+      },
       token_valid: true,
       server_time: new Date().toISOString()
     });

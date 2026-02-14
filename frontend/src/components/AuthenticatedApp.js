@@ -7,7 +7,7 @@ import AddTaskModal from './AddTaskModal';
 import DragDropList from './DragDropList';
 
 function AuthenticatedApp() {
-  const { user, logout, apiCall } = useAuth();
+  const { user, logout, apiCall, formatPubkey } = useAuth();
   const [lists, setLists] = useState([]);
   const [selectedList, setSelectedList] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -216,7 +216,7 @@ function AuthenticatedApp() {
           
           <div className="header-right">
             <div className="user-info">
-              <span>Welcome, {user?.firstName || user?.username}!</span>
+              <span>Welcome, {user?.firstName || user?.username || (user?.pubkey && formatPubkey(user.pubkey))}!</span>
               <button 
                 className="btn btn-secondary btn-small"
                 onClick={() => setShowSettings(true)}

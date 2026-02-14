@@ -1,7 +1,13 @@
-// Enhanced AuthContext.js with refresh token support
-import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+// src/components/AuthContext.js - Nostr Authentication Context
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import {
+  hasNostrExtension,
+  waitForNostrExtension,
+  authenticateWithExtension,
+  formatPubkey
+} from '../lib/nostr';
 
-const AuthContext = createContext();
+const AuthContext = createContext(null);
 
 export const useAuth = () => {
   const context = useContext(AuthContext);
@@ -13,353 +19,276 @@ export const useAuth = () => {
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
-  const [token, setToken] = useState(localStorage.getItem('access_token'));
-  const [refreshToken, setRefreshToken] = useState(localStorage.getItem('refresh_token'));
-  const [tokenExpiry, setTokenExpiry] = useState(localStorage.getItem('token_expiry'));
+  const [token, setToken] = useState(null);
+  const [tokenExpiry, setTokenExpiry] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [keycloakConfig, setKeycloakConfig] = useState(null);
-  
-  // Ref to track if we're currently refreshing to prevent multiple simultaneous refreshes
-  const refreshingRef = useRef(false);
+  const [extensionAvailable, setExtensionAvailable] = useState(false);
+  const [authError, setAuthError] = useState(null);
+
   const refreshTimerRef = useRef(null);
 
-  // API base URL
   const API_BASE = process.env.REACT_APP_API_URL || '/api';
-  const REDIRECT_URI = 'https://tasks.coldforge.xyz';
 
-  // Load Keycloak configuration
-  useEffect(() => {
-    const loadConfig = async () => {
-      try {
-        const response = await fetch(`${API_BASE}/auth/config`);
-        const config = await response.json();
-        setKeycloakConfig(config);
-      } catch (error) {
-        console.error('Failed to load auth config:', error);
-      }
-    };
-    loadConfig();
-  }, [API_BASE]);
+  // Clear all auth state
+  const clearAuth = useCallback(() => {
+    if (refreshTimerRef.current) {
+      clearTimeout(refreshTimerRef.current);
+      refreshTimerRef.current = null;
+    }
+    localStorage.removeItem('access_token');
+    localStorage.removeItem('token_expiry');
+    localStorage.removeItem('user_pubkey');
+    setUser(null);
+    setToken(null);
+    setTokenExpiry(null);
+    setAuthError(null);
+  }, []);
 
-  // Schedule automatic token refresh
-  const scheduleTokenRefresh = (expiryTime) => {
+  // Schedule token refresh
+  const scheduleTokenRefresh = useCallback((expiryTime) => {
     if (refreshTimerRef.current) {
       clearTimeout(refreshTimerRef.current);
     }
 
-    const now = new Date().getTime();
-    const expiry = new Date(expiryTime).getTime();
-    const timeUntilExpiry = expiry - now;
-    
-    // Refresh 2 minutes before expiry (or halfway through if token life < 4 minutes)
-    const refreshBuffer = Math.min(2 * 60 * 1000, timeUntilExpiry / 2);
-    const refreshTime = timeUntilExpiry - refreshBuffer;
+    const now = new Date();
+    const expiry = new Date(expiryTime);
+    const timeUntilExpiry = expiry.getTime() - now.getTime();
 
-    console.log(`Token expires in ${timeUntilExpiry/1000/60} minutes, will refresh in ${refreshTime/1000/60} minutes`);
+    // Refresh 2 minutes before expiry or at half the token lifetime
+    const refreshIn = Math.min(timeUntilExpiry - 2 * 60 * 1000, timeUntilExpiry / 2);
 
-    if (refreshTime > 0) {
+    if (refreshIn > 0) {
+      console.log(`Token refresh scheduled in ${Math.round(refreshIn / 1000 / 60)} minutes`);
       refreshTimerRef.current = setTimeout(() => {
-        console.log('Auto-refreshing token...');
-        refreshTokenSilently();
-      }, refreshTime);
+        refreshToken();
+      }, refreshIn);
     }
-  };
+  }, []);
 
-  // Silent token refresh
-  const refreshTokenSilently = async () => {
-    if (refreshingRef.current || !refreshToken) {
-      return false;
-    }
-
-    refreshingRef.current = true;
-    
+  // Refresh token
+  const refreshToken = useCallback(async () => {
     try {
-      console.log('Attempting silent token refresh...');
-      
+      const currentToken = localStorage.getItem('access_token');
+      if (!currentToken) {
+        clearAuth();
+        return;
+      }
+
       const response = await fetch(`${API_BASE}/auth/refresh`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refresh_token: refreshToken })
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${currentToken}`
+        }
       });
 
-      if (response.ok) {
-        const data = await response.json();
-        
-        // Update tokens
-        setToken(data.access_token);
-        setRefreshToken(data.refresh_token);
-        setTokenExpiry(data.expires_at);
-        
-        // Store in localStorage
-        localStorage.setItem('access_token', data.access_token);
-        localStorage.setItem('refresh_token', data.refresh_token);
-        localStorage.setItem('token_expiry', data.expires_at);
-        
-        // Schedule next refresh
-        scheduleTokenRefresh(data.expires_at);
-        
-        console.log('Token refreshed successfully');
-        return true;
-      } else {
-        console.log('Token refresh failed, user needs to re-login');
-        logout();
+      if (!response.ok) {
+        console.error('Token refresh failed');
+        clearAuth();
+        return;
+      }
+
+      const data = await response.json();
+
+      localStorage.setItem('access_token', data.access_token);
+      localStorage.setItem('token_expiry', data.expires_at);
+
+      setToken(data.access_token);
+      setTokenExpiry(data.expires_at);
+
+      scheduleTokenRefresh(data.expires_at);
+      console.log('Token refreshed successfully');
+    } catch (error) {
+      console.error('Token refresh error:', error);
+      clearAuth();
+    }
+  }, [API_BASE, clearAuth, scheduleTokenRefresh]);
+
+  // Validate existing token on load
+  const validateToken = useCallback(async () => {
+    const storedToken = localStorage.getItem('access_token');
+    const storedExpiry = localStorage.getItem('token_expiry');
+
+    if (!storedToken || !storedExpiry) {
+      clearAuth();
+      return false;
+    }
+
+    // Check if token is expired
+    const now = new Date();
+    const expiry = new Date(storedExpiry);
+    if (now >= expiry) {
+      console.log('Token expired, clearing auth');
+      clearAuth();
+      return false;
+    }
+
+    try {
+      // Validate with server
+      const response = await fetch(`${API_BASE}/auth/token-info`, {
+        headers: {
+          'Authorization': `Bearer ${storedToken}`
+        }
+      });
+
+      if (!response.ok) {
+        clearAuth();
         return false;
       }
-    } catch (error) {
-      console.error('Silent token refresh error:', error);
-      logout();
-      return false;
-    } finally {
-      refreshingRef.current = false;
-    }
-  };
 
-  // Initialize authentication
-  useEffect(() => {
-    const initAuth = async () => {
-      const urlParams = new URLSearchParams(window.location.search);
-      const code = urlParams.get('code');
-      const state = urlParams.get('state');
+      const data = await response.json();
 
-      if (code && state) {
-        const processingKey = `processing_${code}`;
-        if (sessionStorage.getItem(processingKey)) {
-          setLoading(false);
-          return;
-        }
+      setUser(data.user);
+      setToken(storedToken);
+      setTokenExpiry(storedExpiry);
 
-        sessionStorage.setItem(processingKey, 'true');
-        
-        try {
-          await handleOAuthCallback(code, state);
-        } finally {
-          sessionStorage.removeItem(processingKey);
-          window.history.replaceState({}, document.title, window.location.pathname);
-        }
-      } else if (token && tokenExpiry) {
-        // Check if token is expired
-        const now = new Date().getTime();
-        const expiry = new Date(tokenExpiry).getTime();
-        
-        if (now >= expiry) {
-          console.log('Stored token is expired, attempting refresh...');
-          const refreshed = await refreshTokenSilently();
-          if (!refreshed) {
-            // Refresh failed, validate anyway to trigger proper cleanup
-            await validateToken();
-          }
-        } else {
-          // Token still valid, validate and schedule refresh
-          const isValid = await validateToken();
-          if (isValid) {
-            scheduleTokenRefresh(tokenExpiry);
-          }
-        }
-      }
-      
-      setLoading(false);
-    };
-
-    // Check for auth code in URL
-    const urlParams = new URLSearchParams(window.location.search);
-    const authCode = urlParams.get('code');
-    
-    if (authCode || keycloakConfig || token) {
-      initAuth();
-    } else {
-      setLoading(false);
-    }
-  }, [keycloakConfig, token, tokenExpiry]);
-
-  const handleOAuthCallback = async (code, state) => {
-    try {
-      const response = await fetch(`${API_BASE}/auth/callback`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          code: code,
-          state: state,
-          redirect_uri: REDIRECT_URI
-        }),
-      });
-      
-      if (!response.ok) {
-        const errorData = await response.json();
-        console.error('Backend token exchange error:', errorData);
-        
-        if (errorData.details?.error === 'invalid_grant') {
-          window.history.replaceState({}, document.title, window.location.pathname);
-          setLoading(false);
-          return;
-        }
-        
-        throw new Error(`Backend token exchange failed: ${response.status}`);
-      }
-
-      const result = await response.json();
-      console.log('OAuth callback result:', { 
-        hasAccessToken: !!result.access_token,
-        hasRefreshToken: !!result.refresh_token,
-        expiresIn: result.expires_in 
-      });
-      
-      // Store tokens and user data
-      const accessToken = result.access_token;
-      const newRefreshToken = result.refresh_token;
-      const expiresAt = result.expires_at;
-      const userData = result.user;
-
-      setToken(accessToken);
-      setRefreshToken(newRefreshToken);
-      setTokenExpiry(expiresAt);
-      setUser(userData);
-
-      // Store in localStorage
-      localStorage.setItem('access_token', accessToken);
-      localStorage.setItem('refresh_token', newRefreshToken);
-      localStorage.setItem('token_expiry', expiresAt);
-
-      // Schedule automatic refresh
-      scheduleTokenRefresh(expiresAt);
-
-    } catch (error) {
-      console.error('OAuth callback error:', error);
-      logout();
-    }
-  };
-
-  const validateToken = async (tokenToValidate = token) => {
-    if (!tokenToValidate) {
-      setUser(null);
-      return false;
-    }
-
-    try {
-      const response = await fetch(`${API_BASE}/auth/login`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${tokenToValidate}`,
-          'Content-Type': 'application/json',
-        },
-      });
-
-      if (response.ok) {
-        const userData = await response.json();
-        setUser(userData.user);
-        return true;
-      } else {
-        // Token invalid, try refresh if we have refresh token
-        if (refreshToken && !refreshingRef.current) {
-          console.log('Token validation failed, attempting refresh...');
-          const refreshed = await refreshTokenSilently();
-          return refreshed;
-        } else {
-          logout();
-          return false;
-        }
-      }
+      scheduleTokenRefresh(storedExpiry);
+      return true;
     } catch (error) {
       console.error('Token validation error:', error);
-      logout();
+      clearAuth();
       return false;
     }
-  };
+  }, [API_BASE, clearAuth, scheduleTokenRefresh]);
 
-  const login = () => {
-    if (!keycloakConfig) {
-      console.error('Keycloak configuration not loaded');
-      return;
-    }
+  // Initialize auth state
+  useEffect(() => {
+    const initAuth = async () => {
+      setLoading(true);
 
-    const state = Math.random().toString(36).substring(2, 15);
-    localStorage.setItem('oauth_state', state);
+      // Check for extension
+      const hasExtension = await waitForNostrExtension(2000);
+      setExtensionAvailable(hasExtension);
 
-    const authUrl = new URL(keycloakConfig.auth_url);
-    authUrl.searchParams.set('client_id', keycloakConfig.client_id);
-    authUrl.searchParams.set('redirect_uri', REDIRECT_URI);
-    authUrl.searchParams.set('response_type', 'code');
-    authUrl.searchParams.set('scope', 'openid profile email');
-    authUrl.searchParams.set('state', state);
+      // Try to validate existing token
+      await validateToken();
 
-    window.location.href = authUrl.toString();
-  };
-
-  const logout = async () => {
-    try {
-      // Clear refresh timer
-      if (refreshTimerRef.current) {
-        clearTimeout(refreshTimerRef.current);
-      }
-
-      // Clear local storage
-      localStorage.removeItem('access_token');
-      localStorage.removeItem('refresh_token');
-      localStorage.removeItem('token_expiry');
-      localStorage.removeItem('oauth_state');
-      
-      setToken(null);
-      setRefreshToken(null);
-      setTokenExpiry(null);
-      setUser(null);
-
-      if (keycloakConfig && token) {
-        // Logout from Keycloak
-        const logoutUrl = new URL(keycloakConfig.logout_url);
-        logoutUrl.searchParams.set('redirect_uri', REDIRECT_URI);
-        window.location.href = logoutUrl.toString();
-      }
-    } catch (error) {
-      console.error('Logout error:', error);
-    }
-  };
-
-  const isAuthenticated = () => {
-    return !!(token && user);
-  };
-
-  const getAuthHeaders = () => {
-    return token ? { 'Authorization': `Bearer ${token}` } : {};
-  };
-
-  const apiCall = async (url, options = {}) => {
-    const headers = {
-      'Content-Type': 'application/json',
-      ...getAuthHeaders(),
-      ...options.headers,
+      setLoading(false);
     };
 
-    let response = await fetch(`${API_BASE}${url}`, {
-      ...options,
-      headers,
-    });
+    initAuth();
+  }, [validateToken]);
 
-    // If 401 and we have a refresh token, try refreshing once
-    if (response.status === 401 && refreshToken && !refreshingRef.current) {
-      console.log('API call got 401, attempting token refresh...');
-      const refreshed = await refreshTokenSilently();
-      
-      if (refreshed) {
-        // Retry the original request with new token
+  // Login with NIP-07 extension
+  const loginWithExtension = useCallback(async () => {
+    setLoading(true);
+    setAuthError(null);
+
+    try {
+      if (!hasNostrExtension()) {
+        throw new Error('No Nostr extension found. Please install nos2x, Alby, or another NIP-07 compatible extension.');
+      }
+
+      const authResult = await authenticateWithExtension(API_BASE);
+
+      // Store auth data
+      localStorage.setItem('access_token', authResult.access_token);
+      localStorage.setItem('token_expiry', authResult.expires_at);
+      localStorage.setItem('user_pubkey', authResult.user.pubkey);
+
+      setUser(authResult.user);
+      setToken(authResult.access_token);
+      setTokenExpiry(authResult.expires_at);
+
+      scheduleTokenRefresh(authResult.expires_at);
+
+      console.log('Login successful for:', formatPubkey(authResult.user.pubkey));
+      return authResult;
+    } catch (error) {
+      console.error('Login error:', error);
+      setAuthError(error.message);
+      throw error;
+    } finally {
+      setLoading(false);
+    }
+  }, [API_BASE, scheduleTokenRefresh]);
+
+  // Login with NIP-46 bunker (placeholder)
+  const loginWithBunker = useCallback(async (bunkerUrl) => {
+    setLoading(true);
+    setAuthError(null);
+
+    try {
+      // TODO: Implement NIP-46 bunker authentication
+      throw new Error('NIP-46 bunker support coming soon. Please use a browser extension for now.');
+    } catch (error) {
+      console.error('Bunker login error:', error);
+      setAuthError(error.message);
+      throw error;
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  // Logout
+  const logout = useCallback(() => {
+    console.log('Logging out');
+    clearAuth();
+  }, [clearAuth]);
+
+  // Check if authenticated
+  const isAuthenticated = useCallback(() => {
+    return !!token && !!user;
+  }, [token, user]);
+
+  // Get authorization headers
+  const getAuthHeaders = useCallback(() => {
+    if (!token) return {};
+    return {
+      'Authorization': `Bearer ${token}`
+    };
+  }, [token]);
+
+  // Make authenticated API call
+  const apiCall = useCallback(async (url, options = {}) => {
+    const headers = {
+      'Content-Type': 'application/json',
+      ...options.headers,
+      ...getAuthHeaders()
+    };
+
+    try {
+      let response = await fetch(`${API_BASE}${url}`, {
+        ...options,
+        headers
+      });
+
+      // Handle 401/403 - try to refresh and retry
+      if (response.status === 401 || response.status === 403) {
+        const errorData = await response.json().catch(() => ({}));
+
+        if (errorData.action === 'login_required') {
+          clearAuth();
+          throw new Error('Session expired. Please log in again.');
+        }
+
+        // Try refresh
+        await refreshToken();
+
+        // Retry with new token
         const newHeaders = {
           'Content-Type': 'application/json',
-          ...getAuthHeaders(),
           ...options.headers,
+          ...getAuthHeaders()
         };
-        
+
         response = await fetch(`${API_BASE}${url}`, {
           ...options,
-          headers: newHeaders,
+          headers: newHeaders
         });
+
+        if (!response.ok) {
+          clearAuth();
+          throw new Error('Session expired. Please log in again.');
+        }
       }
-    }
 
-    if (response.status === 401) {
-      logout();
-      throw new Error('Authentication required');
+      return response;
+    } catch (error) {
+      console.error('API call error:', error);
+      throw error;
     }
-
-    return response;
-  };
+  }, [API_BASE, getAuthHeaders, clearAuth, refreshToken]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -374,14 +303,15 @@ export const AuthProvider = ({ children }) => {
     user,
     token,
     loading,
-    keycloakConfig,
-    login,
+    extensionAvailable,
+    authError,
+    loginWithExtension,
+    loginWithBunker,
     logout,
     isAuthenticated,
     getAuthHeaders,
     apiCall,
-    validateToken,
-    refreshTokenSilently
+    formatPubkey
   };
 
   return (
@@ -390,3 +320,5 @@ export const AuthProvider = ({ children }) => {
     </AuthContext.Provider>
   );
 };
+
+export default AuthContext;

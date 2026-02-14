@@ -1,89 +1,84 @@
-// middleware/auth.js - Enhanced with better error handling and debugging
-require('dotenv').config();
+// middleware/auth.js - Nostr authentication with JWT sessions
+import dotenv from 'dotenv';
+import jwt from 'jsonwebtoken';
 
-// Function to validate token with Keycloak and get user info
-async function validateTokenWithKeycloak(token) {
+dotenv.config();
+
+// JWT secret - in production, use a secure secret from environment
+const JWT_SECRET = process.env.JWT_SECRET || 'ritual-forge-jwt-secret-change-in-production';
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '24h';
+
+// Verify JWT token and extract user info
+function verifyJWT(token) {
   try {
-    const userInfoUrl = `${process.env.KEYCLOAK_URL}/realms/${process.env.KEYCLOAK_REALM}/protocol/openid-connect/userinfo`;
-    
-    console.log('Validating token with Keycloak:', userInfoUrl);
-    
-    const response = await fetch(userInfoUrl, {
-      headers: {
-        'Authorization': `Bearer ${token}`
-      }
-    });
-
-    console.log('Keycloak validation response:', response.status);
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.log('Keycloak validation error details:', errorText);
-      return null;
-    }
-
-    const keycloakUser = await response.json();
-    console.log('Token validated successfully for user:', keycloakUser.preferred_username);
-    
-    // Transform Keycloak user to our format
+    const decoded = jwt.verify(token, JWT_SECRET);
     return {
-      id: keycloakUser.sub,
-      email: keycloakUser.email,
-      username: keycloakUser.preferred_username,
-      firstName: keycloakUser.given_name,
-      lastName: keycloakUser.family_name,
-      roles: keycloakUser.realm_access?.roles || []
+      id: decoded.pubkey, // Use pubkey as user ID
+      pubkey: decoded.pubkey,
+      username: decoded.username || null,
+      email: decoded.email || null,
+      firstName: decoded.firstName || null,
+      lastName: decoded.lastName || null,
+      roles: decoded.roles || []
     };
   } catch (error) {
-    console.error('Error validating token with Keycloak:', error);
+    console.error('JWT verification failed:', error.message);
     return null;
   }
 }
 
-// Authentication middleware - validates token and sets req.user
+// Issue a new JWT for authenticated user
+function issueJWT(pubkey, additionalClaims = {}) {
+  const payload = {
+    pubkey,
+    ...additionalClaims,
+    iat: Math.floor(Date.now() / 1000)
+  };
+
+  const token = jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+
+  // Calculate expiration timestamp
+  const decoded = jwt.decode(token);
+  const expiresAt = new Date(decoded.exp * 1000).toISOString();
+
+  return {
+    token,
+    expiresAt,
+    expiresIn: decoded.exp - decoded.iat
+  };
+}
+
+// Authentication middleware - validates JWT and sets req.user
 const authenticateToken = async (req, res, next) => {
   try {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
 
-    console.log('=== AUTH DEBUG ===');
-    console.log('Auth header present:', !!authHeader);
-    console.log('Token present:', !!token);
-    console.log('Token length:', token ? token.length : 0);
-    console.log('Token start:', token ? token.substring(0, 20) + '...' : 'none');
-    console.log('==================');
-
     if (!token) {
-      console.log('No token provided');
-      return res.status(401).json({ 
+      return res.status(401).json({
         error: 'Access token required',
-        keycloak_url: `${process.env.KEYCLOAK_URL}/realms/${process.env.KEYCLOAK_REALM}/protocol/openid-connect/auth`
+        action: 'login_required'
       });
     }
 
-    // Validate token with Keycloak
-    const user = await validateTokenWithKeycloak(token);
-    
+    // Verify JWT
+    const user = verifyJWT(token);
+
     if (!user) {
-      console.log('Token validation failed - token invalid or expired');
-      return res.status(403).json({ 
+      return res.status(403).json({
         error: 'Invalid or expired token',
-        action: 'refresh_required',
-        keycloak_url: `${process.env.KEYCLOAK_URL}/realms/${process.env.KEYCLOAK_REALM}/protocol/openid-connect/auth`
+        action: 'login_required'
       });
     }
 
-    console.log('Authentication successful for user:', user.username);
-    
     // Add user to request object
     req.user = user;
     next();
   } catch (error) {
     console.error('Token verification failed:', error);
-    return res.status(403).json({ 
+    return res.status(403).json({
       error: 'Token verification failed',
-      details: error.message,
-      keycloak_url: `${process.env.KEYCLOAK_URL}/realms/${process.env.KEYCLOAK_REALM}/protocol/openid-connect/auth`
+      details: error.message
     });
   }
 };
@@ -99,10 +94,10 @@ const optionalAuth = async (req, res, next) => {
       return next();
     }
 
-    // Validate token with Keycloak
-    const user = await validateTokenWithKeycloak(token);
-    req.user = user; // Will be null if validation failed
-    
+    // Verify JWT
+    const user = verifyJWT(token);
+    req.user = user; // Will be null if verification failed
+
     next();
   } catch (error) {
     console.error('Optional auth error:', error);
@@ -112,20 +107,17 @@ const optionalAuth = async (req, res, next) => {
 };
 
 // Ownership middleware - ensures user owns the resource
-const requireOwnership = (resourceQuery) => {
+// Note: This requires pool to be passed as parameter since we can't use dynamic import in middleware
+const requireOwnership = (pool) => {
   return async (req, res, next) => {
     try {
       if (!req.user) {
         return res.status(401).json({ error: 'Authentication required' });
       }
 
-      // This middleware assumes you have a database pool available
-      // You might need to adjust this based on your setup
-      const { pool } = require('../database/init');
-      
       // Extract resource ID from request params
       const resourceId = req.params.listId || req.params.taskId || req.params.templateId;
-      
+
       if (!resourceId) {
         return res.status(400).json({ error: 'Resource ID required' });
       }
@@ -149,7 +141,7 @@ const requireOwnership = (resourceQuery) => {
       }
 
       const result = await pool.query(query, [resourceId]);
-      
+
       if (result.rows.length === 0) {
         return res.status(404).json({ error: 'Resource not found' });
       }
@@ -166,9 +158,12 @@ const requireOwnership = (resourceQuery) => {
   };
 };
 
-module.exports = {
+export {
   authenticateToken,
   optionalAuth,
   requireOwnership,
-  validateTokenWithKeycloak
+  verifyJWT,
+  issueJWT,
+  JWT_SECRET,
+  JWT_EXPIRES_IN
 };

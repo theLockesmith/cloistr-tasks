@@ -2,6 +2,7 @@
   "name": "task-manager-backend",
   "version": "1.0.0",
   "description": "Daily Task Manager REST API",
+  "type": "module",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -28,7 +29,7 @@
     "dotenv": "^16.3.1",
     "bcrypt": "^5.1.1",
     "jsonwebtoken": "^9.0.2",
-    "jwks-rsa": "^3.0.1"
+    "nostr-tools": "^2.10.4"
   },
   "devDependencies": {
     "nodemon": "^3.0.1",
