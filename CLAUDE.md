@@ -1,18 +1,16 @@
-# CLAUDE.md - ritual-forge
+# CLAUDE.md - Ritual Forge
 
 **Personal task management application with Nostr authentication**
 
-**Status:** Reviving - migrating from Keycloak to Nostr auth
+**Status:** Active development - Nostr auth implemented, expanding features
 
 ## Documentation
 
-Coldforge strategy: `~/claude/coldforge/strategy/CLAUDE.md`
 Coldforge overview: `~/claude/coldforge/CLAUDE.md`
-Roadmap entry: `~/claude/coldforge/strategy/roadmap.md` (Phase 3: Productivity)
 
 ## Project Overview
 
-ritual-forge is a personal task management tool. It uses Nostr for **authentication only** - task data is stored traditionally (not as Nostr events).
+Ritual Forge is a personal task management tool for daily routines and habits. It uses Nostr for **authentication only** - task data is stored traditionally in PostgreSQL.
 
 ### Why Not Nostr-Native Storage?
 
@@ -27,26 +25,25 @@ See README.md "Non-Goals" section for full rationale.
 
 | Layer | Technology |
 |-------|------------|
-| Frontend | React (TypeScript) |
-| Backend | Go (planned migration from current) |
-| Auth | Nostr (NIP-07, NIP-46, NIP-55) |
-| Storage | Traditional (SQLite/PostgreSQL) |
+| Frontend | React (JavaScript) |
+| Backend | Node.js / Express |
+| Auth | Nostr (NIP-07, NIP-19) |
+| Database | PostgreSQL |
+| Sessions | JWT |
 
 ## Roadmap
 
-### Phase 1: Nostr Authentication (Current Priority)
+### Phase 1: Nostr Authentication (In Progress)
 
-Replace Keycloak OAuth with Nostr-native authentication:
-
-- [ ] **NIP-07** - Browser extension signing (nos2x, Alby)
-- [ ] **NIP-46** - Remote signing (nsecbunker)
-- [ ] **NIP-55** - Android signer intents (Amber)
-- [ ] NIP-19 - Bech32 identifier encoding (npub display)
-- [ ] Remove Keycloak dependency
+- [x] **NIP-07** - Browser extension signing (nos2x, Alby)
+- [x] **NIP-19** - Bech32 identifier encoding (npub display)
+- [x] **Remove Keycloak** - Fully migrated to Nostr auth
+- [ ] **NIP-46** - Remote signing (nsecbunker) - UI ready, needs implementation
+- [ ] **NIP-55** - Android signer intents (Amber) - future, if native app
 
 ### Phase 2: Core Features
 
-- [ ] Task completion tracking
+- [x] Task completion tracking
 - [ ] Due date management
 - [ ] Task priority levels
 - [ ] Drag-and-drop reordering
@@ -56,10 +53,11 @@ Replace Keycloak OAuth with Nostr-native authentication:
 - [ ] Calendar integration
 - [ ] Notification system
 - [ ] Data export/import
+- [ ] Backend migration to Go
 
 ### Future Consideration
 
-Potential Cloistr integration - shared identity with other Coldforge services, possible service offering.
+Potential Cloistr integration - shared identity with other Coldforge services.
 
 ## Development
 
@@ -68,15 +66,27 @@ Potential Cloistr integration - shared identity with other Coldforge services, p
 cd frontend && npm install && npm start
 
 # Backend
-cd backend && go run .
+cd backend && npm install && npm start
 ```
+
+## Key Files
+
+### Authentication
+- `frontend/src/lib/nostr.js` - Nostr utilities (NIP-07, NIP-19, NIP-46 stub)
+- `frontend/src/components/AuthContext.js` - React auth context
+- `frontend/src/components/LoginScreen.js` - Login UI
+- `backend/middleware/auth.js` - JWT middleware
+- `backend/server.js` - Auth endpoints (`/api/auth/*`)
+
+### Database
+- `backend/database/init.js` - Schema and initialization
 
 ## Non-Goals
 
-- **Nostr event storage** - Tasks stay in traditional storage
+- **Nostr event storage** - Tasks stay in PostgreSQL
 - **Hybrid publishing** - No "post task to relay" features
 - **Custodial key storage** - App never touches nsec
 
 ---
 
-**Last Updated:** 2026-02-12
+**Last Updated:** 2026-02-16

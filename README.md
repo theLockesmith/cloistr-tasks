@@ -1,141 +1,122 @@
-# Tasks App
+# Ritual Forge
 
-A modern React-based task management application with Keycloak OAuth authentication, featuring customizable task lists and templates.
+A personal task management application with Nostr authentication for daily routines and habit tracking.
 
 ## Features
 
 ### Authentication
-- **Keycloak OAuth Integration**: Secure authentication using OAuth 2.0 with Keycloak
-- **Automatic Token Refresh**: Silent background token renewal to maintain seamless user sessions
-- **Session Management**: Persistent login state with proper cleanup on logout
+- **Nostr NIP-07**: Sign in with browser extensions (Alby, nos2x, etc.)
+- **Nostr NIP-46**: Remote signing via bunker (coming soon)
+- **No passwords**: Your Nostr identity is your login
+- **JWT sessions**: Secure token-based sessions with automatic refresh
 
 ### Task Management
-- **Custom Task Lists**: Create personalized task lists with custom names, descriptions, icons, and colors
-- **Task Templates**: Define reusable task templates with time slots and estimated durations
-- **Visual Customization**: Each list can have a custom emoji/icon and color theme
-- **Time Management**: Set time slots and duration estimates for better planning
+- **Custom Task Lists**: Create personalized lists with icons and colors
+- **Task Templates**: Define reusable daily tasks
+- **Daily Reset**: Tasks reset on your schedule
+- **Visual Customization**: Emoji icons and color themes per list
 
 ### User Experience
-- **Modal-based Interface**: Clean, focused forms for creating lists and tasks
-- **Keyboard Shortcuts**: ESC key support for closing modals
-- **Loading States**: Visual feedback during API operations
-- **Responsive Design**: Works across different screen sizes
+- **Clean Interface**: Modal-based forms for creating lists and tasks
+- **Keyboard Shortcuts**: ESC key support
+- **Loading States**: Visual feedback during operations
+- **npub Display**: Human-readable Nostr identifiers
 
-## Technical Architecture
+## Tech Stack
 
-### Authentication System
-The app uses a robust authentication context (`AuthContext.js`) that provides:
-
-- **OAuth 2.0 Flow**: Complete authorization code flow with Keycloak
-- **Token Management**: Automatic refresh token handling with configurable timing
-- **API Integration**: Built-in `apiCall` method that handles authentication headers and token refresh
-- **Security Features**:
-  - CSRF protection with state parameters
-  - Automatic logout on token refresh failures
-  - Duplicate request prevention
-  - Secure token storage in localStorage
-
-### Key Components
-
-#### AuthProvider
-- Manages authentication state and token lifecycle
-- Provides context for auth-related operations throughout the app
-- Handles OAuth callbacks and error scenarios
-- Implements automatic token refresh scheduling
-
-#### AddListModal
-- Form for creating new task lists
-- Customizable icons (emoji or letters) and colors
-- Form validation and error handling
-
-#### AddTaskModal
-- Interface for adding task templates to lists
-- Supports time slots and duration estimates
-- Integrated with the list-specific API endpoints
-
-### API Integration
-- RESTful API communication
-- Automatic authentication header injection
-- Error handling with user feedback
-- Token refresh retry logic for 401 responses
+| Layer | Technology |
+|-------|------------|
+| Frontend | React (JavaScript) |
+| Backend | Node.js / Express |
+| Auth | Nostr (NIP-07, NIP-19) |
+| Database | PostgreSQL |
+| Sessions | JWT |
 
 ## Setup and Installation
 
 ### Prerequisites
-- Node.js (v14 or higher)
-- React development environment
-- Keycloak server instance
-- Backend API server
+- Node.js (v18 or higher)
+- PostgreSQL database
+- A NIP-07 compatible browser extension (Alby, nos2x, etc.)
 
 ### Environment Variables
-Create a `.env` file with:
+
+Backend `.env`:
+```bash
+PORT=3000
+DATABASE_URL=postgresql://user:password@localhost/ritual_forge
+JWT_SECRET=your-secure-secret-change-in-production
+JWT_EXPIRES_IN=24h
 ```
-REACT_APP_API_URL=your_backend_api_url
+
+Frontend `.env`:
+```bash
+REACT_APP_API_URL=http://localhost:3000/api
 ```
 
 ### Installation
+
 ```bash
-# Install dependencies
-npm install
+# Frontend
+cd frontend && npm install && npm start
 
-# Start development server
-npm start
+# Backend
+cd backend && npm install && npm start
 ```
-
-### Keycloak Configuration
-1. Configure your Keycloak realm and client
-2. Set the redirect URI to match your application URL
-3. Ensure your backend API provides the `/auth/config` endpoint with Keycloak configuration
 
 ## API Endpoints
 
-The application expects these backend endpoints:
-
 ### Authentication
-- `GET /auth/config` - Keycloak configuration
-- `POST /auth/callback` - OAuth callback handler
-- `POST /auth/refresh` - Token refresh
-- `POST /auth/login` - Token validation
+- `GET /api/auth/config` - Auth configuration (supported NIPs)
+- `GET /api/auth/challenge` - Get authentication challenge
+- `POST /api/auth/verify` - Verify signed event, get JWT
+- `POST /api/auth/refresh` - Refresh JWT token
+- `GET /api/auth/token-info` - Validate token and get user info
+
+### User
+- `GET /api/user/profile` - Get user profile and settings
+- `PUT /api/user/settings` - Update user settings
+- `POST /api/user/reset` - Manual task reset for today
+- `GET /api/user/analytics` - Task completion analytics
+- `GET /api/user/reset-history` - Reset history
 
 ### Lists and Tasks
-- `POST /lists` - Create new task list
-- `POST /lists/:id/templates` - Add task template to list
+- `GET /api/lists` - Get all task lists
+- `POST /api/lists` - Create new task list
+- `GET /api/lists/:listId/tasks` - Get tasks for a list
+- `POST /api/lists/:listId/templates` - Add task template
+- `PUT /api/templates/:templateId` - Update template
+- `DELETE /api/templates/:templateId` - Delete template
+- `POST /api/tasks/:taskId/toggle` - Toggle task completion
 
-## Security Considerations
+## Authentication Flow
 
-- Tokens are stored in localStorage (consider HttpOnly cookies for production)
-- CSRF protection through state parameters
-- Automatic cleanup of expired sessions
-- Rate limiting considerations for token refresh
+1. Frontend requests challenge from `/api/auth/challenge`
+2. User signs challenge with NIP-07 extension
+3. Frontend sends signed event to `/api/auth/verify`
+4. Backend verifies Nostr signature and issues JWT
+5. JWT used for subsequent API calls
+6. Automatic token refresh before expiry
 
-## Development Notes
+## Non-Goals
 
-### Token Refresh Strategy
-- Refreshes 2 minutes before expiry (or halfway through token life if < 4 minutes)
-- Prevents multiple simultaneous refresh attempts
-- Graceful fallback to re-authentication on refresh failure
-
-### Error Handling
-- Network error recovery
-- User-friendly error messages
-- Proper loading states
-- Form validation
+- **Nostr event storage**: Tasks remain in traditional PostgreSQL storage, not published as Nostr events
+- **Hybrid publishing**: No "post task to relay" features
+- **Custodial key storage**: App never touches nsec; external signers handle keys
 
 ## Roadmap
 
-### Phase 1: Nostr Authentication (Replace Keycloak)
+### Phase 1: Nostr Authentication (Current)
 
-Replace Keycloak OAuth with Nostr-native authentication:
-
-- [ ] **NIP-07** - Browser extension signing (nos2x, Alby, etc.)
-- [ ] **NIP-46** - Remote signing (nsecbunker integration)
-- [ ] **NIP-55** - Android signer intents (Amber) - if native app
-- [ ] NIP-19 - Bech32 identifier encoding (npub display)
-- [ ] Remove Keycloak dependency entirely
+- [x] **NIP-07** - Browser extension signing (nos2x, Alby, etc.)
+- [x] **NIP-19** - Bech32 identifier encoding (npub display)
+- [x] **Remove Keycloak** - Fully migrated to Nostr auth
+- [ ] **NIP-46** - Remote signing (nsecbunker) - UI ready, implementation pending
+- [ ] **NIP-55** - Android signer intents (future, if native app)
 
 ### Phase 2: Core Features
 
-- [ ] Task completion tracking
+- [x] Task completion tracking
 - [ ] Due date management
 - [ ] Task priority levels
 - [ ] Drag-and-drop reordering
@@ -146,26 +127,24 @@ Replace Keycloak OAuth with Nostr-native authentication:
 - [ ] Calendar integration
 - [ ] Notification system
 - [ ] Data export/import
-- [ ] Mobile app companion (consider NIP-55 for Android)
+- [ ] Backend migration to Go
 
-### Non-Goals
+### Future Consideration
 
-- **Nostr event storage** - Tasks remain in traditional storage (local/backend), not published as Nostr events
-- **Hybrid publishing** - No "post task to relay" features; use a Nostr client directly for that
-- **Custodial key storage** - App never touches nsec; external signers handle keys
+- Cloistr integration for shared identity across Coldforge services
 
-## Contributing
+## Development
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
+```bash
+# Run both frontend and backend
+cd frontend && npm start &
+cd backend && npm start
+```
 
 ## License
 
-[Your chosen license]
+MIT
 
 ---
 
-This task management application provides a solid foundation for personal productivity while maintaining enterprise-grade security through Keycloak integration.
+Built with Nostr authentication - your keys, your identity.
