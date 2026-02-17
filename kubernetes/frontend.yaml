@@ -22,7 +22,7 @@ spec:
     spec:
       containers:
       - name: frontend
-        image: registry.coldforge.xyz/prod-images/ritual-forge/frontend:latest
+        image: registry.git.coldforge.xyz/coldforge/cloistr-tasks/frontend:latest
         ports:
         - containerPort: 80
           name: http

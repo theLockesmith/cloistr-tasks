@@ -69,7 +69,7 @@ spec:
 
       containers:
       - name: backend
-        image: registry.coldforge.xyz/prod-images/ritual-forge/backend:latest
+        image: registry.git.coldforge.xyz/coldforge/cloistr-tasks/backend:latest
         ports:
         - containerPort: 3000
           name: http
