@@ -13,7 +13,7 @@ build:backend:
     entrypoint: [""]
   <<: *kaniko-auth
   script:
-    - /kaniko/executor --context ${CI_PROJECT_DIR}/backend --dockerfile ${CI_PROJECT_DIR}/backend/Dockerfile --destination ${CI_REGISTRY_IMAGE}/backend:${CI_COMMIT_SHORT_SHA} --destination ${CI_REGISTRY_IMAGE}/backend:latest
+    - /kaniko/executor --context ${CI_PROJECT_DIR}/backend --dockerfile ${CI_PROJECT_DIR}/backend/Dockerfile --destination ${CI_REGISTRY}/${CI_PROJECT_NAMESPACE}/cloistr-tasks-backend:${CI_COMMIT_SHORT_SHA} --destination ${CI_REGISTRY}/${CI_PROJECT_NAMESPACE}/cloistr-tasks-backend:latest
 
 build:frontend:
   stage: build
@@ -22,4 +22,4 @@ build:frontend:
     entrypoint: [""]
   <<: *kaniko-auth
   script:
-    - /kaniko/executor --context ${CI_PROJECT_DIR}/frontend --dockerfile ${CI_PROJECT_DIR}/frontend/Dockerfile --destination ${CI_REGISTRY_IMAGE}/frontend:${CI_COMMIT_SHORT_SHA} --destination ${CI_REGISTRY_IMAGE}/frontend:latest
+    - /kaniko/executor --context ${CI_PROJECT_DIR}/frontend --dockerfile ${CI_PROJECT_DIR}/frontend/Dockerfile --destination ${CI_REGISTRY}/${CI_PROJECT_NAMESPACE}/cloistr-tasks-frontend:${CI_COMMIT_SHORT_SHA} --destination ${CI_REGISTRY}/${CI_PROJECT_NAMESPACE}/cloistr-tasks-frontend:latest
