@@ -1,10 +1,14 @@
 stages:
   - build
 
+variables:
+  HARBOR_REGISTRY: oci.coldforge.xyz
+  HARBOR_PROJECT: coldforge
+
 .kaniko-auth: &kaniko-auth
   before_script:
     - mkdir -p /kaniko/.docker
-    - echo "{\"auths\":{\"${CI_REGISTRY}\":{\"auth\":\"$(printf "%s:%s" "${CI_REGISTRY_USER}" "${CI_REGISTRY_PASSWORD}" | base64 | tr -d '\n')\"}}}" > /kaniko/.docker/config.json
+    - echo "{\"auths\":{\"${HARBOR_REGISTRY}\":{\"auth\":\"$(printf "%s:%s" "${HARBOR_USER}" "${HARBOR_PASSWORD}" | base64 | tr -d '\n')\"}}}" > /kaniko/.docker/config.json
 
 build:backend:
   stage: build
@@ -13,7 +17,7 @@ build:backend:
     entrypoint: [""]
   <<: *kaniko-auth
   script:
-    - /kaniko/executor --context ${CI_PROJECT_DIR}/backend --dockerfile ${CI_PROJECT_DIR}/backend/Dockerfile --destination ${CI_REGISTRY_IMAGE}/backend:${CI_COMMIT_SHORT_SHA} --destination ${CI_REGISTRY_IMAGE}/backend:latest
+    - /kaniko/executor --context ${CI_PROJECT_DIR}/backend --dockerfile ${CI_PROJECT_DIR}/backend/Dockerfile --destination ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/ritual-forge-backend:${CI_COMMIT_SHORT_SHA} --destination ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/ritual-forge-backend:latest
 
 build:frontend:
   stage: build
@@ -22,4 +26,4 @@ build:frontend:
     entrypoint: [""]
   <<: *kaniko-auth
   script:
-    - /kaniko/executor --context ${CI_PROJECT_DIR}/frontend --dockerfile ${CI_PROJECT_DIR}/frontend/Dockerfile --destination ${CI_REGISTRY_IMAGE}/frontend:${CI_COMMIT_SHORT_SHA} --destination ${CI_REGISTRY_IMAGE}/frontend:latest
+    - /kaniko/executor --context ${CI_PROJECT_DIR}/frontend --dockerfile ${CI_PROJECT_DIR}/frontend/Dockerfile --destination ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/ritual-forge-frontend:${CI_COMMIT_SHORT_SHA} --destination ${HARBOR_REGISTRY}/${HARBOR_PROJECT}/ritual-forge-frontend:latest
