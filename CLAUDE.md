@@ -4,9 +4,10 @@
 
 **Status:** Active development - Nostr auth implemented, expanding features
 
-## Documentation
+## REQUIRED READING (Before ANY Action)
 
-Coldforge overview: `~/claude/coldforge/CLAUDE.md`
+**Claude MUST read this file at the start of every session:**
+- `~/claude/coldforge/cloistr/CLAUDE.md` - Cloistr project rules (contains further required reading)
 
 ## Project Overview
 
