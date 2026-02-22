@@ -1,8 +1,8 @@
 FROM node:18-alpine
 
-LABEL maintainer="coldforge" \
+LABEL maintainer="cloistr" \
       version="1.0.0" \
-      description="Ritual Forge Backend API"
+      description="Cloistr Tasks Backend API"
 
 WORKDIR /app
 

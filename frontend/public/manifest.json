@@ -1,6 +1,6 @@
 {
   "short_name": "Tasks",
-  "name": "Coldforge Tasks",
+  "name": "Cloistr Tasks",
   "description": "Personal task management with Nostr authentication",
   "icons": [
     {

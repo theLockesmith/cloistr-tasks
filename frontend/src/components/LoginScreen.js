@@ -46,7 +46,7 @@ function LoginScreen() {
     <div className="app">
       <div className="login-container">
         <div className="login-card">
-          <h1>Ritual Forge</h1>
+          <h1>Cloistr Tasks</h1>
           <p>Daily task management with Nostr authentication</p>
 
           {displayError && (

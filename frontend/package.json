@@ -1,7 +1,7 @@
 {
-    "name": "task-manager-frontend",
+    "name": "cloistr-tasks-frontend",
     "version": "1.0.0",
-    "description": "Daily Task Manager React Frontend",
+    "description": "Cloistr Tasks - React Frontend",
     "private": true,
     "dependencies": {
       "nostr-tools": "^2.10.4",

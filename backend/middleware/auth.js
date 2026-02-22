@@ -5,7 +5,7 @@ import jwt from 'jsonwebtoken';
 dotenv.config();
 
 // JWT secret - in production, use a secure secret from environment
-const JWT_SECRET = process.env.JWT_SECRET || 'ritual-forge-jwt-secret-change-in-production';
+const JWT_SECRET = process.env.JWT_SECRET || 'cloistr-tasks-jwt-secret-change-in-production';
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '24h';
 
 // Verify JWT token and extract user info

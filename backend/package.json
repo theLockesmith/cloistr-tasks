@@ -1,7 +1,7 @@
 {
-  "name": "task-manager-backend",
+  "name": "cloistr-tasks-backend",
   "version": "1.0.0",
-  "description": "Daily Task Manager REST API",
+  "description": "Cloistr Tasks - REST API Backend",
   "type": "module",
   "main": "server.js",
   "scripts": {
