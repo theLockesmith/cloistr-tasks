@@ -4,6 +4,7 @@ import {
   hasNostrExtension,
   waitForNostrExtension,
   authenticateWithExtension,
+  authenticateWithBunker,
   formatPubkey
 } from '../lib/nostr';
 
@@ -203,14 +204,27 @@ export const AuthProvider = ({ children }) => {
     }
   }, [API_BASE, scheduleTokenRefresh]);
 
-  // Login with NIP-46 bunker (placeholder)
+  // Login with NIP-46 bunker
   const loginWithBunker = useCallback(async (bunkerUrl) => {
     setLoading(true);
     setAuthError(null);
 
     try {
-      // TODO: Implement NIP-46 bunker authentication
-      throw new Error('NIP-46 bunker support coming soon. Please use a browser extension for now.');
+      const authResult = await authenticateWithBunker(API_BASE, bunkerUrl);
+
+      // Store auth data
+      localStorage.setItem('access_token', authResult.access_token);
+      localStorage.setItem('token_expiry', authResult.expires_at);
+      localStorage.setItem('user_pubkey', authResult.user.pubkey);
+
+      setUser(authResult.user);
+      setToken(authResult.access_token);
+      setTokenExpiry(authResult.expires_at);
+
+      scheduleTokenRefresh(authResult.expires_at);
+
+      console.log('Bunker login successful for:', formatPubkey(authResult.user.pubkey));
+      return authResult;
     } catch (error) {
       console.error('Bunker login error:', error);
       setAuthError(error.message);
@@ -218,7 +232,7 @@ export const AuthProvider = ({ children }) => {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [API_BASE, scheduleTokenRefresh]);
 
   // Logout
   const logout = useCallback(() => {

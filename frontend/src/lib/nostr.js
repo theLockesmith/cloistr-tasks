@@ -1,6 +1,7 @@
 // src/lib/nostr.js - Nostr authentication utilities
-import { finalizeEvent, verifyEvent } from 'nostr-tools/pure';
+import { finalizeEvent, verifyEvent, generateSecretKey, getPublicKey } from 'nostr-tools/pure';
 import { nip19 } from 'nostr-tools';
+import { BunkerSigner, parseBunkerInput } from 'nostr-tools/nip46';
 
 // ============================================
 // NIP-07 Browser Extension Support
@@ -57,66 +58,94 @@ export async function signEventWithExtension(event) {
 // NIP-46 Remote Signer (Bunker) Support
 // ============================================
 
+// Store client secret key in memory (generated once per session)
+let clientSecretKey = null;
+
 /**
- * Parse a bunker:// URL
- * Format: bunker://<remote-signer-pubkey>?relay=<relay-url>&secret=<secret>
+ * Get or create the client secret key for NIP-46 communication
  */
-export function parseBunkerUrl(bunkerUrl) {
-  if (!bunkerUrl.startsWith('bunker://')) {
-    throw new Error('Invalid bunker URL format');
+export function getClientSecretKey() {
+  if (!clientSecretKey) {
+    clientSecretKey = generateSecretKey();
   }
-
-  const url = new URL(bunkerUrl);
-  const remotePubkey = url.hostname || url.pathname.replace('//', '');
-  const relay = url.searchParams.get('relay');
-  const secret = url.searchParams.get('secret');
-
-  if (!remotePubkey) {
-    throw new Error('Missing remote pubkey in bunker URL');
-  }
-
-  return {
-    remotePubkey,
-    relay: relay ? decodeURIComponent(relay) : null,
-    secret: secret || null
-  };
+  return clientSecretKey;
 }
 
 /**
- * NIP-46 Client for remote signing
- * Note: This is a simplified implementation. For production, use a full NIP-46 client.
+ * Get the client's public key (derived from secret key)
+ */
+export function getClientPublicKey() {
+  return getPublicKey(getClientSecretKey());
+}
+
+/**
+ * NIP-46 Client wrapper for remote signing
+ * Uses nostr-tools BunkerSigner internally
  */
 export class Nip46Client {
   constructor(bunkerUrl) {
-    const parsed = parseBunkerUrl(bunkerUrl);
-    this.remotePubkey = parsed.remotePubkey;
-    this.relayUrl = parsed.relay;
-    this.secret = parsed.secret;
+    this.bunkerUrl = bunkerUrl;
+    this.signer = null;
     this.connected = false;
     this.userPubkey = null;
   }
 
   async connect() {
-    // For now, we'll implement a basic connection
-    // A full implementation would establish WebSocket connection to relay
-    // and perform the NIP-46 handshake
-    console.log('NIP-46 connection to:', this.remotePubkey);
+    console.log('NIP-46 connecting to:', this.bunkerUrl);
 
-    // TODO: Implement full NIP-46 protocol
-    // For now, throw an error to indicate this needs implementation
-    throw new Error('NIP-46 bunker support coming soon. Please use a browser extension for now.');
+    // Parse the bunker URL
+    const bunkerPointer = await parseBunkerInput(this.bunkerUrl);
+    if (!bunkerPointer) {
+      throw new Error('Invalid bunker URL or NIP-05 identifier');
+    }
+
+    if (!bunkerPointer.relays || bunkerPointer.relays.length === 0) {
+      throw new Error('No relays specified in bunker URL');
+    }
+
+    console.log('Bunker pointer:', bunkerPointer);
+
+    // Create the signer with our client secret key
+    const secretKey = getClientSecretKey();
+    this.signer = BunkerSigner.fromBunker(secretKey, bunkerPointer, {
+      onauth: (url) => {
+        // Handle auth URL - open in new window for user to approve
+        console.log('Auth required, opening:', url);
+        window.open(url, '_blank', 'width=600,height=800');
+      }
+    });
+
+    // Connect to the bunker
+    await this.signer.connect();
+
+    // Get the user's public key
+    this.userPubkey = await this.signer.getPublicKey();
+    this.connected = true;
+
+    console.log('NIP-46 connected, user pubkey:', this.userPubkey);
+    return this.userPubkey;
+  }
+
+  async getPublicKey() {
+    if (!this.connected || !this.signer) {
+      throw new Error('Not connected to bunker');
+    }
+    return this.signer.getPublicKey();
   }
 
   async signEvent(event) {
-    if (!this.connected) {
+    if (!this.connected || !this.signer) {
       throw new Error('Not connected to bunker');
     }
-    // TODO: Send sign_event request to bunker via relay
-    throw new Error('Not implemented');
+    return this.signer.signEvent(event);
   }
 
   async disconnect() {
+    if (this.signer) {
+      await this.signer.close();
+    }
     this.connected = false;
+    this.signer = null;
   }
 }
 
@@ -209,6 +238,61 @@ export async function authenticateWithExtension(apiBase) {
   }
 
   return verifyResponse.json();
+}
+
+/**
+ * Perform full authentication flow with NIP-46 bunker
+ */
+export async function authenticateWithBunker(apiBase, bunkerUrl) {
+  // 1. Create and connect to bunker
+  const client = new Nip46Client(bunkerUrl);
+  const pubkey = await client.connect();
+
+  // 2. Get challenge from server
+  const challengeResponse = await fetch(`${apiBase}/auth/challenge`);
+  if (!challengeResponse.ok) {
+    await client.disconnect();
+    throw new Error('Failed to get challenge');
+  }
+  const { challenge, nonce } = await challengeResponse.json();
+
+  // 3. Create unsigned event
+  const unsignedEvent = createAuthEvent(pubkey, challenge, nonce);
+
+  // 4. Sign with bunker
+  let signedEvent;
+  try {
+    signedEvent = await client.signEvent(unsignedEvent);
+  } catch (error) {
+    await client.disconnect();
+    throw new Error(`Bunker signing failed: ${error.message}`);
+  }
+
+  // 5. Verify the event is valid
+  if (!verifyEvent(signedEvent)) {
+    await client.disconnect();
+    throw new Error('Invalid signature from bunker');
+  }
+
+  // 6. Send to server for verification
+  const verifyResponse = await fetch(`${apiBase}/auth/verify`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ signedEvent })
+  });
+
+  if (!verifyResponse.ok) {
+    await client.disconnect();
+    const error = await verifyResponse.json();
+    throw new Error(error.error || 'Authentication failed');
+  }
+
+  // Store the client for later use (signing future events)
+  // Note: In a real app, you might want to store this in context
+  const result = await verifyResponse.json();
+  result._bunkerClient = client;
+
+  return result;
 }
 
 // ============================================
