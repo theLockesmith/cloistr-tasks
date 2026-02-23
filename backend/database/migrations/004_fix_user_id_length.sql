@@ -1,6 +1,9 @@
 -- 004_fix_user_id_length.sql
 -- Fix user id column length to accommodate Nostr pubkeys (64-char hex)
 
+-- Drop view that depends on users.id before altering column type
+DROP VIEW IF EXISTS user_tasks_today;
+
 -- Expand id column from VARCHAR(36) to VARCHAR(64)
 ALTER TABLE users ALTER COLUMN id TYPE VARCHAR(64);
 
@@ -124,5 +127,31 @@ BEGIN
     RETURN COALESCE(total_created, 0);
 END;
 $$ LANGUAGE plpgsql;
+
+-- Recreate the view with updated column types
+CREATE OR REPLACE VIEW user_tasks_today AS
+SELECT
+    t.id,
+    t.completed_at,
+    t.notes,
+    tt.name,
+    tt.description,
+    tt.time_slot,
+    tt.estimated_minutes,
+    tl.name as list_name,
+    tl.icon as list_icon,
+    tl.color as list_color,
+    tl.user_id,
+    u.username,
+    us.reset_time,
+    us.reset_timezone,
+    CASE WHEN t.completed_at IS NOT NULL THEN true ELSE false END as completed
+FROM tasks t
+JOIN task_templates tt ON t.template_id = tt.id
+JOIN task_lists tl ON t.list_id = tl.id
+JOIN users u ON tl.user_id = u.id
+LEFT JOIN user_settings us ON u.id = us.user_id
+WHERE DATE(t.reset_date) = CURRENT_DATE
+ORDER BY tl.sort_order, tt.sort_order;
 
 COMMENT ON COLUMN users.id IS 'User ID - Nostr pubkey (64-char hex) or legacy Keycloak UUID';
