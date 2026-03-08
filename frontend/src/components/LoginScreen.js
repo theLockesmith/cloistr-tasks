@@ -46,6 +46,11 @@ function LoginScreen() {
     <div className="app">
       <div className="login-container">
         <div className="login-card">
+          <img
+            src="/cloistr-icon.svg"
+            alt="Cloistr"
+            style={{ width: '80px', height: '80px', marginBottom: '16px' }}
+          />
           <h1>Cloistr Tasks</h1>
           <p>Daily task management with Nostr authentication</p>
 

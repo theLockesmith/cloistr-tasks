@@ -28,18 +28,18 @@ See README.md "Non-Goals" section for full rationale.
 |-------|------------|
 | Frontend | React (JavaScript) |
 | Backend | Node.js / Express |
-| Auth | Nostr (NIP-07, NIP-19) |
+| Auth | Nostr (NIP-07, NIP-19, NIP-46) |
 | Database | PostgreSQL |
 | Sessions | JWT |
 
 ## Roadmap
 
-### Phase 1: Nostr Authentication (In Progress)
+### Phase 1: Nostr Authentication (Complete)
 
 - [x] **NIP-07** - Browser extension signing (nos2x, Alby)
 - [x] **NIP-19** - Bech32 identifier encoding (npub display)
 - [x] **Remove Keycloak** - Fully migrated to Nostr auth
-- [ ] **NIP-46** - Remote signing (nsecbunker) - UI ready, needs implementation
+- [x] **NIP-46** - Remote signing (nsecbunker)
 - [ ] **NIP-55** - Android signer intents (Amber) - future, if native app
 
 ### Phase 2: Core Features
@@ -51,14 +51,14 @@ See README.md "Non-Goals" section for full rationale.
 
 ### Phase 3: Enhanced Features
 
-- [ ] Calendar integration
+- [ ] **iCal feed export** - Expose tasks with due dates as `.ics` feed (loose coupling for calendar integration)
 - [ ] Notification system
 - [ ] Data export/import
 - [ ] Backend migration to Go
 
-### Future Consideration
+### Design Decisions
 
-Potential Cloistr integration - shared identity with other Coldforge services.
+- **Loose coupling over integration** - Apps communicate via standard protocols (iCal, CalDAV) rather than direct integration. Self-hosters can deploy apps independently.
 
 ## Development
 
@@ -73,7 +73,7 @@ cd backend && npm install && npm start
 ## Key Files
 
 ### Authentication
-- `frontend/src/lib/nostr.js` - Nostr utilities (NIP-07, NIP-19, NIP-46 stub)
+- `frontend/src/lib/nostr.js` - Nostr utilities (NIP-07, NIP-19, NIP-46)
 - `frontend/src/components/AuthContext.js` - React auth context
 - `frontend/src/components/LoginScreen.js` - Login UI
 - `backend/middleware/auth.js` - JWT middleware
@@ -90,4 +90,4 @@ cd backend && npm install && npm start
 
 ---
 
-**Last Updated:** 2026-02-16
+**Last Updated:** 2026-03-06
