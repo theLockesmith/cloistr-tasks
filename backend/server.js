@@ -5,6 +5,7 @@ import helmet from 'helmet';
 import morgan from 'morgan';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
+import promClient from 'prom-client';
 
 import { initializeDatabase, createPool, createAppPool } from './database/init.js';
 import { authenticateToken, optionalAuth, requireOwnership, issueJWT } from './middleware/auth.js';
@@ -21,11 +22,73 @@ const port = process.env.PORT || 3000;
 // Global database pool
 let pool;
 
+// Prometheus metrics setup
+const register = new promClient.Registry();
+register.setDefaultLabels({ app: 'cloistr-tasks-backend' });
+promClient.collectDefaultMetrics({ register });
+
+// Custom metrics
+const httpRequestDuration = new promClient.Histogram({
+  name: 'http_request_duration_seconds',
+  help: 'Duration of HTTP requests in seconds',
+  labelNames: ['method', 'route', 'status_code'],
+  buckets: [0.01, 0.05, 0.1, 0.5, 1, 2, 5]
+});
+register.registerMetric(httpRequestDuration);
+
+const httpRequestsTotal = new promClient.Counter({
+  name: 'http_requests_total',
+  help: 'Total number of HTTP requests',
+  labelNames: ['method', 'route', 'status_code']
+});
+register.registerMetric(httpRequestsTotal);
+
+const activeConnections = new promClient.Gauge({
+  name: 'http_active_connections',
+  help: 'Number of active HTTP connections'
+});
+register.registerMetric(activeConnections);
+
+const dbQueryDuration = new promClient.Histogram({
+  name: 'db_query_duration_seconds',
+  help: 'Duration of database queries in seconds',
+  labelNames: ['operation'],
+  buckets: [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1]
+});
+register.registerMetric(dbQueryDuration);
+
+// Middleware to track metrics
+const metricsMiddleware = (req, res, next) => {
+  // Skip metrics endpoint itself
+  if (req.path === '/metrics') {
+    return next();
+  }
+
+  activeConnections.inc();
+  const start = process.hrtime.bigint();
+
+  res.on('finish', () => {
+    activeConnections.dec();
+    const duration = Number(process.hrtime.bigint() - start) / 1e9;
+    const route = req.route?.path || req.path;
+    const labels = {
+      method: req.method,
+      route: route,
+      status_code: res.statusCode
+    };
+    httpRequestDuration.observe(labels, duration);
+    httpRequestsTotal.inc(labels);
+  });
+
+  next();
+};
+
 // Middleware
 app.use(helmet());
 app.use(cors());
 app.use(morgan('combined'));
 app.use(express.json());
+app.use(metricsMiddleware);
 
 // User sync/creation function for Nostr users
 async function syncUser(userInfo) {
@@ -95,6 +158,16 @@ async function startServer() {
     process.exit(1);
   }
 }
+
+// Prometheus metrics endpoint
+app.get('/metrics', async (req, res) => {
+  try {
+    res.set('Content-Type', register.contentType);
+    res.end(await register.metrics());
+  } catch (error) {
+    res.status(500).end(error.message);
+  }
+});
 
 // Health check endpoint
 app.get('/health', async (req, res) => {
