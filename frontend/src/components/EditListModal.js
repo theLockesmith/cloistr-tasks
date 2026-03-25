@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import IconPicker from './IconPicker';
 
 function EditListModal({ list, onClose, onSave, onDelete, apiCall }) {
   const [formData, setFormData] = useState({
@@ -129,17 +130,12 @@ function EditListModal({ list, onClose, onSave, onDelete, apiCall }) {
           />
           
           <div className="form-row">
-            <div className="form-group">
-              <label>Icon (emoji or letter)</label>
-              <input
-                type="text"
-                placeholder="Icon (emoji or letter)"
-                value={formData.icon}
-                onChange={e => setFormData({...formData, icon: e.target.value})}
-                maxLength={2}
-              />
-            </div>
-            
+            <IconPicker
+              value={formData.icon}
+              onChange={(icon) => setFormData({...formData, icon})}
+              color={formData.color}
+            />
+
             <div className="form-group">
               <label>Icon Color</label>
               <input

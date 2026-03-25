@@ -5,7 +5,9 @@ function AddTaskModal({ listId, onClose, onSave, apiCall }) {
     name: '',
     description: '',
     timeSlot: '',
-    estimatedMinutes: ''
+    estimatedMinutes: '',
+    priority: 'medium',
+    dueDate: ''
   });
   const [loading, setLoading] = useState(false);
 
@@ -21,13 +23,13 @@ function AddTaskModal({ listId, onClose, onSave, apiCall }) {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
-    
+
     try {
       const response = await apiCall('/lists/' + listId + '/templates', {
         method: 'POST',
         body: JSON.stringify(formData)
       });
-      
+
       if (response.ok) {
         onSave();
       } else {
@@ -45,7 +47,7 @@ function AddTaskModal({ listId, onClose, onSave, apiCall }) {
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()}>
         <h3>Add New Task</h3>
-        
+
         <form onSubmit={handleSubmit}>
           <input
             type="text"
@@ -54,13 +56,29 @@ function AddTaskModal({ listId, onClose, onSave, apiCall }) {
             onChange={e => setFormData({...formData, name: e.target.value})}
             required
           />
-          
+
           <textarea
-            placeholder="Description"
+            placeholder="Description (optional)"
             value={formData.description}
             onChange={e => setFormData({...formData, description: e.target.value})}
           />
-          
+
+          <div className="form-group">
+            <label>Priority</label>
+            <div className="priority-selector">
+              {['low', 'medium', 'high'].map((level) => (
+                <button
+                  key={level}
+                  type="button"
+                  className={`priority-option ${formData.priority === level ? 'selected' : ''} priority-${level}`}
+                  onClick={() => setFormData({...formData, priority: level})}
+                >
+                  {level.charAt(0).toUpperCase() + level.slice(1)}
+                </button>
+              ))}
+            </div>
+          </div>
+
           <div className="form-row">
             <input
               type="text"
@@ -68,7 +86,7 @@ function AddTaskModal({ listId, onClose, onSave, apiCall }) {
               value={formData.timeSlot}
               onChange={e => setFormData({...formData, timeSlot: e.target.value})}
             />
-            
+
             <input
               type="number"
               placeholder="Minutes"
@@ -76,7 +94,16 @@ function AddTaskModal({ listId, onClose, onSave, apiCall }) {
               onChange={e => setFormData({...formData, estimatedMinutes: e.target.value})}
             />
           </div>
-          
+
+          <div className="form-group">
+            <label>Due Date (optional)</label>
+            <input
+              type="date"
+              value={formData.dueDate}
+              onChange={e => setFormData({...formData, dueDate: e.target.value})}
+            />
+          </div>
+
           <div className="modal-actions">
             <button type="button" onClick={onClose} className="btn btn-secondary" disabled={loading}>
               Cancel

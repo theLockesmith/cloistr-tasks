@@ -466,7 +466,7 @@ app.get('/api/lists/:listId/tasks', authenticateToken, async (req, res) => {
     
     const result = await pool.query(`
       SELECT t.*, tt.name as template_name, tt.description as template_description,
-             tt.time_slot, tt.estimated_minutes
+             tt.time_slot, tt.estimated_minutes, tt.priority, tt.due_date
       FROM tasks t
       JOIN task_templates tt ON t.template_id = tt.id
       JOIN task_lists tl ON t.list_id = tl.id
@@ -552,8 +552,8 @@ app.post('/api/lists', authenticateToken, async (req, res) => {
 app.post('/api/lists/:listId/templates', authenticateToken, async (req, res) => {
   try {
     const { listId } = req.params;
-    const { name, description, timeSlot, estimatedMinutes } = req.body;
-    
+    const { name, description, timeSlot, estimatedMinutes, priority, dueDate } = req.body;
+
     // Check ownership inline
     const ownershipCheck = await pool.query('SELECT user_id FROM task_lists WHERE id = $1', [listId]);
     if (ownershipCheck.rows.length === 0) {
@@ -562,17 +562,17 @@ app.post('/api/lists/:listId/templates', authenticateToken, async (req, res) => 
     if (ownershipCheck.rows[0].user_id !== req.user.id) {
       return res.status(403).json({ error: 'Access denied' });
     }
-    
+
     // Create the template
     const templateResult = await pool.query(`
-      INSERT INTO task_templates (list_id, name, description, time_slot, estimated_minutes, sort_order)
-      VALUES ($1, $2, $3, $4, $5, (
-        SELECT COALESCE(MAX(sort_order), 0) + 1 
-        FROM task_templates 
+      INSERT INTO task_templates (list_id, name, description, time_slot, estimated_minutes, priority, due_date, sort_order)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, (
+        SELECT COALESCE(MAX(sort_order), 0) + 1
+        FROM task_templates
         WHERE list_id = $1
       ))
       RETURNING *
-    `, [listId, name, description, timeSlot, estimatedMinutes]);
+    `, [listId, name, description, timeSlot, estimatedMinutes, priority || 'medium', dueDate || null]);
     
     const newTemplate = templateResult.rows[0];
     
@@ -597,17 +597,33 @@ app.post('/api/lists/:listId/templates', authenticateToken, async (req, res) => 
 app.put('/api/templates/:templateId', authenticateToken, async (req, res) => {
   try {
     const { templateId } = req.params;
-    const { name, description, timeSlot, estimatedMinutes } = req.body;
-    
+    const { name, description, timeSlot, estimatedMinutes, priority, dueDate, sort_order } = req.body;
+
+    // Build dynamic update query based on provided fields
+    const updates = [];
+    const values = [];
+    let paramIndex = 1;
+
+    if (name !== undefined) { updates.push(`name = $${paramIndex++}`); values.push(name); }
+    if (description !== undefined) { updates.push(`description = $${paramIndex++}`); values.push(description); }
+    if (timeSlot !== undefined) { updates.push(`time_slot = $${paramIndex++}`); values.push(timeSlot); }
+    if (estimatedMinutes !== undefined) { updates.push(`estimated_minutes = $${paramIndex++}`); values.push(estimatedMinutes); }
+    if (priority !== undefined) { updates.push(`priority = $${paramIndex++}`); values.push(priority); }
+    if (dueDate !== undefined) { updates.push(`due_date = $${paramIndex++}`); values.push(dueDate || null); }
+    if (sort_order !== undefined) { updates.push(`sort_order = $${paramIndex++}`); values.push(sort_order); }
+
+    updates.push('updated_at = NOW()');
+    values.push(templateId, req.user.id);
+
     const result = await pool.query(`
-      UPDATE task_templates 
-      SET name = $1, description = $2, time_slot = $3, estimated_minutes = $4, updated_at = NOW()
+      UPDATE task_templates
+      SET ${updates.join(', ')}
       FROM task_lists tl
       WHERE task_templates.list_id = tl.id
-      AND task_templates.id = $5
-      AND tl.user_id = $6
+      AND task_templates.id = $${paramIndex++}
+      AND tl.user_id = $${paramIndex}
       RETURNING task_templates.*
-    `, [name, description, timeSlot, estimatedMinutes, templateId, req.user.id]);
+    `, values);
     
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Template not found or access denied' });

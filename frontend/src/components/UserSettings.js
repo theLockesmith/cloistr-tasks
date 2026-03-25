@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react';
 function UserSettings({ onClose, apiCall, userSettings, setUserSettings, onSettingsUpdate }) {
   const [localSettings, setLocalSettings] = useState({
     previewTaskCount: 5,
-    showCompletedInPreview: false,
+    showCompletedInPreview: true,
     theme: 'system',
     resetEnabled: true,
     resetTime: '06:00',

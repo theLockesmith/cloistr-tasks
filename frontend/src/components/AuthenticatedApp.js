@@ -17,7 +17,7 @@ function AuthenticatedApp() {
   
   const [userSettings, setUserSettings] = useState({
     previewTaskCount: 5,
-    showCompletedInPreview: false,
+    showCompletedInPreview: true,
     theme: 'system',
     resetEnabled: true,
     resetTime: '06:00',
@@ -90,7 +90,7 @@ function AuthenticatedApp() {
         setUserSettings(prev => ({
           ...prev,
           previewTaskCount: data.preview_task_count || 5,
-          showCompletedInPreview: data.show_completed_in_preview || false,
+          showCompletedInPreview: data.show_completed_in_preview !== false,
           theme: data.theme || 'system',
           resetEnabled: data.reset_enabled !== false,
           resetTime: data.reset_time || '06:00',
@@ -330,28 +330,28 @@ function AuthenticatedApp() {
                       ) : (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                           {previewTasks.map(task => (
-                            <div 
+                            <div
                               key={task.id}
                               className="task-preview-item"
                               style={{
                                 opacity: task.completed_at ? 0.6 : 1,
-                                textDecoration: task.completed_at ? 'line-through' : 'none',
-                                cursor: 'pointer'
-                              }}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                toggleTaskFromPreview(task.id, list.id);
+                                textDecoration: task.completed_at ? 'line-through' : 'none'
                               }}
                             >
-                              <div 
+                              <div
                                 className="task-preview-checkbox"
                                 style={{
-                                  backgroundColor: task.completed_at 
-                                    ? 'var(--primary)' 
+                                  backgroundColor: task.completed_at
+                                    ? 'var(--primary)'
                                     : 'var(--border)',
                                   color: task.completed_at ? 'white' : 'var(--text-secondary)',
                                   cursor: 'pointer'
                                 }}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  toggleTaskFromPreview(task.id, list.id);
+                                }}
+                                title="Click to toggle completion"
                               >
                                 {task.completed_at ? '✓' : ''}
                               </div>
