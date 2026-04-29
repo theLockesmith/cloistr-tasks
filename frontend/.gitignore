@@ -1,0 +1,13 @@
+# Dependencies
+node_modules/
+
+# Build output
+build/
+
+# IDE
+.idea/
+.vscode/
+
+# Misc
+.DS_Store
+*.log
