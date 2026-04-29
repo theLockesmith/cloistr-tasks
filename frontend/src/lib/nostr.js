@@ -1,7 +1,11 @@
 // src/lib/nostr.js - Nostr authentication utilities
-import { finalizeEvent, verifyEvent, generateSecretKey, getPublicKey } from 'nostr-tools/pure';
+// Uses @cloistr/collab-common for NIP-07/NIP-46 signer management
 import { nip19 } from 'nostr-tools';
-import { BunkerSigner, parseBunkerInput } from 'nostr-tools/nip46';
+import { verifyEvent } from 'nostr-tools/pure';
+import {
+  connectNip07,
+  connectNip46,
+} from '@cloistr/collab-common/auth';
 
 // ============================================
 // NIP-07 Browser Extension Support
@@ -34,150 +38,6 @@ export async function waitForNostrExtension(timeoutMs = 3000) {
   });
 }
 
-/**
- * Get public key from NIP-07 extension
- */
-export async function getPublicKeyFromExtension() {
-  if (!hasNostrExtension()) {
-    throw new Error('No Nostr extension found');
-  }
-  return window.nostr.getPublicKey();
-}
-
-/**
- * Sign an event using NIP-07 extension
- */
-export async function signEventWithExtension(event) {
-  if (!hasNostrExtension()) {
-    throw new Error('No Nostr extension found');
-  }
-  return window.nostr.signEvent(event);
-}
-
-// ============================================
-// NIP-46 Remote Signer (Bunker) Support
-// ============================================
-
-// Store client secret key in memory (generated once per session)
-let clientSecretKey = null;
-
-/**
- * Get or create the client secret key for NIP-46 communication
- */
-export function getClientSecretKey() {
-  if (!clientSecretKey) {
-    clientSecretKey = generateSecretKey();
-  }
-  return clientSecretKey;
-}
-
-/**
- * Get the client's public key (derived from secret key)
- */
-export function getClientPublicKey() {
-  return getPublicKey(getClientSecretKey());
-}
-
-/**
- * NIP-46 Client wrapper for remote signing
- * Uses nostr-tools BunkerSigner internally
- */
-export class Nip46Client {
-  constructor(bunkerUrl) {
-    this.bunkerUrl = bunkerUrl;
-    this.signer = null;
-    this.connected = false;
-    this.userPubkey = null;
-  }
-
-  async connect() {
-    console.log('NIP-46 connecting to:', this.bunkerUrl);
-
-    // Parse the bunker URL
-    const bunkerPointer = await parseBunkerInput(this.bunkerUrl);
-    if (!bunkerPointer) {
-      throw new Error('Invalid bunker URL or NIP-05 identifier');
-    }
-
-    if (!bunkerPointer.relays || bunkerPointer.relays.length === 0) {
-      throw new Error('No relays specified in bunker URL');
-    }
-
-    console.log('Bunker pointer:', bunkerPointer);
-
-    // Create the signer with our client secret key
-    const secretKey = getClientSecretKey();
-    this.signer = BunkerSigner.fromBunker(secretKey, bunkerPointer, {
-      onauth: (url) => {
-        // Handle auth URL - open in new window for user to approve
-        console.log('Auth required, opening:', url);
-        window.open(url, '_blank', 'width=600,height=800');
-      }
-    });
-
-    // Connect to the bunker
-    await this.signer.connect();
-
-    // Get the user's public key
-    this.userPubkey = await this.signer.getPublicKey();
-    this.connected = true;
-
-    console.log('NIP-46 connected, user pubkey:', this.userPubkey);
-    return this.userPubkey;
-  }
-
-  async getPublicKey() {
-    if (!this.connected || !this.signer) {
-      throw new Error('Not connected to bunker');
-    }
-    return this.signer.getPublicKey();
-  }
-
-  async signEvent(event) {
-    if (!this.connected || !this.signer) {
-      throw new Error('Not connected to bunker');
-    }
-    return this.signer.signEvent(event);
-  }
-
-  async disconnect() {
-    if (this.signer) {
-      await this.signer.close();
-    }
-    this.connected = false;
-    this.signer = null;
-  }
-}
-
-// ============================================
-// Shared Signer Interface
-// ============================================
-
-/**
- * Create a unified signer interface for either NIP-07 or NIP-46
- */
-export function createSigner(type, options = {}) {
-  if (type === 'extension') {
-    return {
-      type: 'extension',
-      getPublicKey: getPublicKeyFromExtension,
-      signEvent: signEventWithExtension
-    };
-  } else if (type === 'bunker') {
-    const client = new Nip46Client(options.bunkerUrl);
-    return {
-      type: 'bunker',
-      client,
-      getPublicKey: async () => {
-        await client.connect();
-        return client.userPubkey;
-      },
-      signEvent: (event) => client.signEvent(event)
-    };
-  }
-  throw new Error(`Unknown signer type: ${type}`);
-}
-
 // ============================================
 // Authentication Helpers
 // ============================================
@@ -202,23 +62,25 @@ export function createAuthEvent(pubkey, challenge, nonce) {
 
 /**
  * Perform full authentication flow with NIP-07 extension
+ * Uses collab-common's connectNip07 for signer management
  */
 export async function authenticateWithExtension(apiBase) {
-  // 1. Get challenge from server
+  // 1. Connect to extension via collab-common
+  const signer = await connectNip07();
+  const pubkey = await signer.getPublicKey();
+
+  // 2. Get challenge from server
   const challengeResponse = await fetch(`${apiBase}/auth/challenge`);
   if (!challengeResponse.ok) {
     throw new Error('Failed to get challenge');
   }
   const { challenge, nonce } = await challengeResponse.json();
 
-  // 2. Get public key from extension
-  const pubkey = await getPublicKeyFromExtension();
-
   // 3. Create unsigned event
   const unsignedEvent = createAuthEvent(pubkey, challenge, nonce);
 
-  // 4. Sign with extension
-  const signedEvent = await signEventWithExtension(unsignedEvent);
+  // 4. Sign with collab-common signer
+  const signedEvent = await signer.signEvent(unsignedEvent);
 
   // 5. Verify the event is valid
   if (!verifyEvent(signedEvent)) {
@@ -242,16 +104,17 @@ export async function authenticateWithExtension(apiBase) {
 
 /**
  * Perform full authentication flow with NIP-46 bunker
+ * Uses collab-common's connectNip46 for signer management
  */
 export async function authenticateWithBunker(apiBase, bunkerUrl) {
-  // 1. Create and connect to bunker
-  const client = new Nip46Client(bunkerUrl);
-  const pubkey = await client.connect();
+  // 1. Connect to bunker via collab-common
+  const signer = await connectNip46({ bunkerUrl });
+  const pubkey = await signer.getPublicKey();
 
   // 2. Get challenge from server
   const challengeResponse = await fetch(`${apiBase}/auth/challenge`);
   if (!challengeResponse.ok) {
-    await client.disconnect();
+    await signer.close?.();
     throw new Error('Failed to get challenge');
   }
   const { challenge, nonce } = await challengeResponse.json();
@@ -259,18 +122,18 @@ export async function authenticateWithBunker(apiBase, bunkerUrl) {
   // 3. Create unsigned event
   const unsignedEvent = createAuthEvent(pubkey, challenge, nonce);
 
-  // 4. Sign with bunker
+  // 4. Sign with collab-common signer
   let signedEvent;
   try {
-    signedEvent = await client.signEvent(unsignedEvent);
+    signedEvent = await signer.signEvent(unsignedEvent);
   } catch (error) {
-    await client.disconnect();
+    await signer.close?.();
     throw new Error(`Bunker signing failed: ${error.message}`);
   }
 
   // 5. Verify the event is valid
   if (!verifyEvent(signedEvent)) {
-    await client.disconnect();
+    await signer.close?.();
     throw new Error('Invalid signature from bunker');
   }
 
@@ -282,15 +145,14 @@ export async function authenticateWithBunker(apiBase, bunkerUrl) {
   });
 
   if (!verifyResponse.ok) {
-    await client.disconnect();
+    await signer.close?.();
     const error = await verifyResponse.json();
     throw new Error(error.error || 'Authentication failed');
   }
 
-  // Store the client for later use (signing future events)
-  // Note: In a real app, you might want to store this in context
+  // Store the signer for later use (signing future events)
   const result = await verifyResponse.json();
-  result._bunkerClient = client;
+  result._signer = signer;
 
   return result;
 }
