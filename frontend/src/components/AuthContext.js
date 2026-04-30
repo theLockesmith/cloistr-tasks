@@ -7,6 +7,10 @@ import {
   authenticateWithBunker,
   formatPubkey
 } from '../lib/nostr';
+import {
+  saveSharedSession,
+  clearSharedSession,
+} from '../lib/session';
 
 const AuthContext = createContext(null);
 
@@ -43,6 +47,8 @@ export const AuthProvider = ({ children }) => {
     setToken(null);
     setTokenExpiry(null);
     setAuthError(null);
+    // Clear shared session for cross-subdomain SSO
+    clearSharedSession();
   }, []);
 
   // Schedule token refresh
@@ -193,6 +199,12 @@ export const AuthProvider = ({ children }) => {
 
       scheduleTokenRefresh(authResult.expires_at);
 
+      // Save to shared session for cross-subdomain SSO
+      saveSharedSession({
+        method: 'nip07',
+        pubkey: authResult.user.pubkey,
+      });
+
       console.log('Login successful for:', formatPubkey(authResult.user.pubkey));
       return authResult;
     } catch (error) {
@@ -222,6 +234,13 @@ export const AuthProvider = ({ children }) => {
       setTokenExpiry(authResult.expires_at);
 
       scheduleTokenRefresh(authResult.expires_at);
+
+      // Save to shared session for cross-subdomain SSO
+      saveSharedSession({
+        method: 'nip46',
+        pubkey: authResult.user.pubkey,
+        bunkerUrl,
+      });
 
       console.log('Bunker login successful for:', formatPubkey(authResult.user.pubkey));
       return authResult;
