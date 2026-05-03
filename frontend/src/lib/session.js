@@ -5,18 +5,30 @@
  * This allows single sign-on: login once on any service, authenticated everywhere.
  */
 
-const COOKIE_CONFIG = {
-  domain: '.cloistr.xyz',
-  path: '/',
-  maxAge: 60 * 60 * 24 * 30, // 30 days
-  secure: true,
-  sameSite: 'lax',
+/**
+ * Session TTL options in seconds
+ */
+export const SESSION_TTL_OPTIONS = {
+  '1d': 60 * 60 * 24,           // 1 day
+  '7d': 60 * 60 * 24 * 7,       // 7 days
+  '30d': 60 * 60 * 24 * 30,     // 30 days
+  'never': 60 * 60 * 24 * 400,  // 400 days (browser max)
 };
+
+export const SESSION_TTL_LABELS = {
+  '1d': '1 day',
+  '7d': '7 days',
+  '30d': '30 days',
+  'never': 'Does not expire',
+};
+
+const DEFAULT_TTL = '30d';
 
 const COOKIE_KEYS = {
   METHOD: 'cloistr_auth_method',
   PUBKEY: 'cloistr_auth_pubkey',
   BUNKER: 'cloistr_auth_bunker',
+  TTL: 'cloistr_session_ttl',
 };
 
 /**
@@ -29,23 +41,6 @@ export function isCloistrDomain() {
 }
 
 /**
- * Build cookie string with proper attributes
- */
-function buildCookie(name, value, options) {
-  const parts = [`${name}=${encodeURIComponent(value)}`];
-
-  if (isCloistrDomain()) {
-    parts.push(`domain=${options.domain}`);
-  }
-  parts.push(`path=${options.path}`);
-  parts.push(`max-age=${options.maxAge}`);
-  if (options.secure) parts.push('secure');
-  parts.push(`samesite=${options.sameSite}`);
-
-  return parts.join('; ');
-}
-
-/**
  * Get a cookie by name
  */
 function getCookie(name) {
@@ -55,16 +50,69 @@ function getCookie(name) {
 }
 
 /**
+ * Get current TTL preference or default
+ */
+export function getSessionTTL() {
+  const stored = getCookie(COOKIE_KEYS.TTL);
+  if (stored && stored in SESSION_TTL_OPTIONS) {
+    return stored;
+  }
+  return DEFAULT_TTL;
+}
+
+/**
+ * Build cookie string with specific maxAge
+ */
+function buildCookieWithMaxAge(name, value, maxAge) {
+  const parts = [`${name}=${encodeURIComponent(value)}`];
+
+  if (isCloistrDomain()) {
+    parts.push('domain=.cloistr.xyz');
+  }
+
+  parts.push('path=/');
+  parts.push(`max-age=${maxAge}`);
+  parts.push('secure');
+  parts.push('samesite=lax');
+
+  return parts.join('; ');
+}
+
+/**
+ * Build cookie string with user's TTL preference
+ */
+function buildCookie(name, value) {
+  const ttl = getSessionTTL();
+  const maxAge = SESSION_TTL_OPTIONS[ttl];
+  return buildCookieWithMaxAge(name, value, maxAge);
+}
+
+/**
+ * Set session TTL preference
+ */
+export function setSessionTTL(ttl) {
+  if (typeof document === 'undefined') return;
+  const maxAge = SESSION_TTL_OPTIONS[ttl];
+  document.cookie = buildCookieWithMaxAge(COOKIE_KEYS.TTL, ttl, maxAge);
+
+  // Refresh other session cookies with new TTL
+  const session = getSharedSession();
+  if (session) {
+    saveSharedSession(session);
+  }
+}
+
+/**
  * Save shared session to cookies
  */
 export function saveSharedSession(session) {
   if (typeof document === 'undefined') return;
 
-  document.cookie = buildCookie(COOKIE_KEYS.METHOD, session.method, COOKIE_CONFIG);
-  document.cookie = buildCookie(COOKIE_KEYS.PUBKEY, session.pubkey, COOKIE_CONFIG);
+  document.cookie = buildCookie(COOKIE_KEYS.METHOD, session.method);
+  document.cookie = buildCookie(COOKIE_KEYS.PUBKEY, session.pubkey);
 
   if (session.bunkerUrl) {
-    document.cookie = buildCookie(COOKIE_KEYS.BUNKER, session.bunkerUrl, COOKIE_CONFIG);
+    document.cookie = buildCookie(COOKIE_KEYS.BUNKER, session.bunkerUrl);
   }
 }
 
@@ -97,9 +145,26 @@ export function hasSharedSession() {
 export function clearSharedSession() {
   if (typeof document === 'undefined') return;
 
-  const expiredConfig = { ...COOKIE_CONFIG, maxAge: 0 };
+  const deleteCookie = (name) => {
+    if (isCloistrDomain()) {
+      document.cookie = `${name}=; domain=.cloistr.xyz; path=/; max-age=0`;
+    }
+    document.cookie = `${name}=; path=/; max-age=0`;
+  };
 
-  document.cookie = buildCookie(COOKIE_KEYS.METHOD, '', expiredConfig);
-  document.cookie = buildCookie(COOKIE_KEYS.PUBKEY, '', expiredConfig);
-  document.cookie = buildCookie(COOKIE_KEYS.BUNKER, '', expiredConfig);
+  deleteCookie(COOKIE_KEYS.METHOD);
+  deleteCookie(COOKIE_KEYS.PUBKEY);
+  deleteCookie(COOKIE_KEYS.BUNKER);
+  deleteCookie(COOKIE_KEYS.TTL);
+}
+
+/**
+ * Renew session cookies with fresh TTL
+ * Call this on token refresh for auto-renewal
+ */
+export function renewSession() {
+  const session = getSharedSession();
+  if (session) {
+    saveSharedSession(session);
+  }
 }

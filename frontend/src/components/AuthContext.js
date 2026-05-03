@@ -10,6 +10,7 @@ import {
 import {
   saveSharedSession,
   clearSharedSession,
+  renewSession,
 } from '../lib/session';
 
 const AuthContext = createContext(null);
@@ -104,6 +105,10 @@ export const AuthProvider = ({ children }) => {
       setTokenExpiry(data.expires_at);
 
       scheduleTokenRefresh(data.expires_at);
+
+      // Auto-renew SSO cookies on token refresh
+      renewSession();
+
       console.log('Token refreshed successfully');
     } catch (error) {
       console.error('Token refresh error:', error);
