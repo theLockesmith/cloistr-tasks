@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Header, Footer } from '@cloistr/ui/components';
 import { useAuth } from './AuthContext';
 import TaskListModal from './TaskListModal';
 import UserSettings from './UserSettings';
@@ -207,36 +208,20 @@ function AuthenticatedApp() {
 
   return (
     <div className="app">
-      <header className="header">
-        <div className="header-content">
-          <div className="header-left">
-            <h1>Daily Task Manager</h1>
-            <p className="date">{getCurrentDate()}</p>
-          </div>
-          
-          <div className="header-right">
-            <div className="user-info">
-              <span>Welcome, {user?.firstName || user?.username || (user?.pubkey && formatPubkey(user.pubkey))}!</span>
-              <button 
-                className="btn btn-secondary btn-small"
-                onClick={() => setShowSettings(true)}
-                title="Settings"
-              >
-                ⚙
-              </button>
-              <button 
-                className="btn btn-secondary btn-small"
-                onClick={logout}
-                title="Logout"
-              >
-                ↗
-              </button>
-            </div>
-          </div>
-        </div>
-      </header>
+      <Header activeServiceId="tasks" />
 
       <div className="main-content">
+        <div className="page-header">
+          <h1>Daily Task Manager</h1>
+          <p className="date">{getCurrentDate()}</p>
+          <button
+            className="btn btn-secondary btn-small"
+            onClick={() => setShowSettings(true)}
+            title="Settings"
+          >
+            ⚙ Settings
+          </button>
+        </div>
         <div className="dashboard">
           <div className="dashboard-header">
             <h2>Your Task Lists</h2>
@@ -423,7 +408,7 @@ function AuthenticatedApp() {
       )}
 
       {showSettings && (
-        <UserSettings 
+        <UserSettings
           onClose={() => setShowSettings(false)}
           apiCall={apiCall}
           userSettings={userSettings}
@@ -433,6 +418,8 @@ function AuthenticatedApp() {
           }}
         />
       )}
+
+      <Footer />
     </div>
   );
 }

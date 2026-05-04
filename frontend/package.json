@@ -5,6 +5,7 @@
     "private": true,
     "dependencies": {
         "@cloistr/collab-common": "^0.2.1",
+        "@cloistr/ui": "^0.4.4",
         "nostr-tools": "^2.10.4",
         "react": "^18.2.0",
         "react-dom": "^18.2.0",
