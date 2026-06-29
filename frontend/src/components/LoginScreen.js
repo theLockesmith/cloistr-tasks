@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Header } from '@cloistr/ui/components';
 import { useAuth } from './AuthContext';
 
 function LoginScreen() {
@@ -44,6 +45,7 @@ function LoginScreen() {
 
   return (
     <div className="app">
+      <Header activeServiceId="tasks" />
       <div className="login-container">
         <div className="login-card">
           <img
