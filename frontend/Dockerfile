@@ -15,7 +15,7 @@ RUN npm run build
 FROM nginxinc/nginx-unprivileged:alpine
 
 # Copy built assets
-COPY --from=build /app/build /usr/share/nginx/html
+COPY --from=build /app/dist /usr/share/nginx/html
 
 # Copy nginx config for SPA routing + API proxy (non-root, port 8080)
 USER root

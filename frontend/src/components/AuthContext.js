@@ -33,7 +33,7 @@ export const AuthProvider = ({ children }) => {
 
   const refreshTimerRef = useRef(null);
 
-  const API_BASE = process.env.REACT_APP_API_URL || '/api';
+  const API_BASE = import.meta.env.VITE_API_URL || '/api';
 
   // Clear all auth state
   const clearAuth = useCallback(() => {
