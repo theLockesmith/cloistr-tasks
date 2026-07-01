@@ -208,7 +208,12 @@ function AuthenticatedApp() {
 
   return (
     <div className="app">
-      <Header activeServiceId="tasks" />
+      {/* Feed the Header explicit auth state (tasks uses its own JWT session),
+          so the navbar shows the signed-in user instead of "Sign In". */}
+      <Header
+        activeServiceId="tasks"
+        auth={{ authenticated: true, pubkey: user?.pubkey, onLogout: logout }}
+      />
 
       <div className="main-content">
         <div className="page-header">
