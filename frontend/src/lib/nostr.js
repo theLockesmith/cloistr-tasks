@@ -5,7 +5,7 @@ import { verifyEvent } from 'nostr-tools/pure';
 import {
   connectNip07,
   connectNip46,
-} from '@cloistr/collab-common/auth';
+} from '@cloistr/auth';
 
 // ============================================
 // NIP-07 Browser Extension Support
