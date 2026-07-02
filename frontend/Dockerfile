@@ -22,7 +22,9 @@ USER root
 RUN echo 'server { \
     listen 8080; \
     location /api/ { \
-        proxy_pass http://cloistr-tasks-backend.cloistr.svc.cluster.local:80; \
+        resolver 127.0.0.11 valid=30s; \
+        set $backend http://cloistr-tasks-backend.cloistr.svc.cluster.local:80; \
+        proxy_pass $backend; \
         proxy_http_version 1.1; \
         proxy_set_header Host $host; \
         proxy_set_header X-Real-IP $remote_addr; \
