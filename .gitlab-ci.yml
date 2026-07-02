@@ -5,9 +5,15 @@ default:
 stages:
   - update
   - build
+  - smoke
 
 variables:
   NODE_VERSION: "22"
+
+include:
+  - project: 'coldforge/ci-templates'
+    ref: main
+    file: '/templates/frontend-smoke.yml'
 
 # Auto-update @cloistr/ui when triggered from upstream
 update-dependency:
@@ -36,7 +42,7 @@ update-dependency:
 .kaniko-auth: &kaniko-auth
   before_script:
     - mkdir -p /kaniko/.docker
-    - echo "{\"auths\":{\"${CI_REGISTRY}\":{\"auth\":\"$(printf "%s:%s" "${CI_REGISTRY_USER}" "${CI_REGISTRY_PASSWORD}" | base64 | tr -d '\n')\"}}}" > /kaniko/.docker/config.json
+    - echo "{\"auths\":{\"${CI_REGISTRY}\":{\"auth\":\"$(printf '%s:%s' \"${CI_REGISTRY_USER}\" \"${CI_REGISTRY_PASSWORD}\" | base64 | tr -d '\\n')\"}}}" > /kaniko/.docker/config.json
 
 build:backend:
   stage: build
@@ -55,3 +61,10 @@ build:frontend:
   <<: *kaniko-auth
   script:
     - /kaniko/executor --context ${CI_PROJECT_DIR}/frontend --dockerfile ${CI_PROJECT_DIR}/frontend/Dockerfile --destination ${CI_REGISTRY_IMAGE}/frontend:${CI_COMMIT_SHORT_SHA} --destination ${CI_REGISTRY_IMAGE}/frontend:latest
+
+# Smoke-test: load frontend image in real Chromium, fail on console errors / blank page
+smoke-test:
+  extends: .smoke-test
+  needs: ["build:frontend"]
+  variables:
+    SMOKE_IMAGE: "$CI_REGISTRY_IMAGE/frontend:$CI_COMMIT_SHORT_SHA"
