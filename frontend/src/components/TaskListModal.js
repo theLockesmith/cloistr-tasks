@@ -99,14 +99,10 @@ function TaskListModal({ list, onClose, apiCall, user, onTasksUpdated }) {
   };
 
   const getProgressColor = (percentage) => {
-    if (percentage === 0) return '#ef4444';
-    if (percentage === 100) return '#22c55e';
-    
-    const red = Math.round(239 - (239 - 34) * (percentage / 100));
-    const green = Math.round(68 + (197 - 68) * (percentage / 100));
-    const blue = Math.round(68 + (94 - 68) * (percentage / 100));
-    
-    return 'rgb(' + red + ',' + green + ',' + blue + ')';
+    if (percentage === 0) return 'var(--cloistr-error)';
+    if (percentage === 100) return 'var(--cloistr-success)';
+    if (percentage < 50) return 'color-mix(in srgb, var(--cloistr-warning) ' + (percentage * 2) + '%, var(--cloistr-error))';
+    return 'color-mix(in srgb, var(--cloistr-success) ' + ((percentage - 50) * 2) + '%, var(--cloistr-warning))';
   };
 
   if (loading) {

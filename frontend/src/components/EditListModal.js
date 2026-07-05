@@ -1,12 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import IconPicker from './IconPicker';
 
+const getDefaultColor = () => {
+  const v = getComputedStyle(document.documentElement).getPropertyValue('--cloistr-primary').trim();
+  return v || '#2dd4bf';
+};
+
 function EditListModal({ list, onClose, onSave, onDelete, apiCall }) {
   const [formData, setFormData] = useState({
     name: '',
     description: '',
     icon: '',
-    color: '#2dd4bf',
+    color: getDefaultColor(),
     listType: 'recurring',
     resetEnabled: true,
     resetTime: '06:00',
@@ -22,7 +27,7 @@ function EditListModal({ list, onClose, onSave, onDelete, apiCall }) {
         name: list.name || '',
         description: list.description || '',
         icon: list.icon || '',
-        color: list.color || '#2dd4bf',
+        color: list.color || getDefaultColor(),
         listType: list.list_type || 'recurring',
         resetEnabled: list.reset_enabled !== false,
         resetTime: list.reset_time || '06:00',

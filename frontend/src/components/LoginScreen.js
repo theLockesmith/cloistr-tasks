@@ -58,8 +58,8 @@ function LoginScreen() {
 
           {displayError && (
             <div className="error-message" style={{
-              color: '#dc3545',
-              backgroundColor: '#f8d7da',
+              color: 'var(--cloistr-error)',
+              backgroundColor: 'color-mix(in srgb, var(--cloistr-error) 12%, var(--cloistr-bg-elevated))',
               padding: '10px',
               borderRadius: '4px',
               marginBottom: '15px'
@@ -79,7 +79,7 @@ function LoginScreen() {
               </button>
             ) : (
               <div style={{ marginBottom: '15px' }}>
-                <p style={{ color: '#666', fontSize: '14px' }}>
+                <p style={{ color: 'var(--cloistr-text-muted)', fontSize: '14px' }}>
                   No Nostr extension detected. Install{' '}
                   <a href="https://getalby.com" target="_blank" rel="noopener noreferrer">Alby</a>,{' '}
                   <a href="https://github.com/nickytonline/nos2x" target="_blank" rel="noopener noreferrer">nos2x</a>, or another NIP-07 extension.
@@ -94,7 +94,7 @@ function LoginScreen() {
               </div>
             )}
 
-            <div style={{ textAlign: 'center', margin: '15px 0', color: '#666' }}>
+            <div style={{ textAlign: 'center', margin: '15px 0', color: 'var(--cloistr-text-muted)' }}>
               or
             </div>
 
@@ -117,7 +117,7 @@ function LoginScreen() {
                     width: '100%',
                     padding: '10px',
                     marginBottom: '10px',
-                    border: '1px solid #ddd',
+                    border: '1px solid var(--cloistr-border)',
                     borderRadius: '4px',
                     fontSize: '14px'
                   }}
