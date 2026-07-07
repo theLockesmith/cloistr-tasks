@@ -1,33 +1,28 @@
-import React, { useState } from 'react';
-import { Header } from '@cloistr/ui/components';
+import React from 'react';
+import { LoginModal } from '@cloistr/ui/components';
+import { useNostrAuth } from '@cloistr/auth';
 import { useAuth } from './AuthContext';
 
+const SIGNER_URL = 'https://signer.cloistr.xyz';
+
 function LoginScreen() {
-  const { loginWithExtension, loginWithBunker, extensionAvailable, loading, authError } = useAuth();
-  const [bunkerUrl, setBunkerUrl] = useState('');
-  const [showBunker, setShowBunker] = useState(false);
-  const [localError, setLocalError] = useState(null);
+  const { authState } = useNostrAuth();
+  const { loginWithSigner, loading } = useAuth();
 
-  const handleExtensionLogin = async () => {
-    setLocalError(null);
-    try {
-      await loginWithExtension();
-    } catch (error) {
-      setLocalError(error.message);
+  // Called by LoginModal when the user successfully authenticates and the
+  // modal closes (NIP-07, NIP-46/bunker, password+nostrconnect, passkey,
+  // or Lightning). At this point authState.signer is the connected signer;
+  // we hand it straight to loginWithSigner which runs the tasks backend
+  // challenge/verify to obtain a JWT — no second connectNip07/connectNip46.
+  const handleClose = async () => {
+    if (authState.signer) {
+      try {
+        await loginWithSigner(authState.signer);
+      } catch {
+        // loginWithSigner sets authError on AuthContext; let it surface there
+      }
     }
-  };
-
-  const handleBunkerLogin = async () => {
-    if (!bunkerUrl.trim()) {
-      setLocalError('Please enter a bunker URL');
-      return;
-    }
-    setLocalError(null);
-    try {
-      await loginWithBunker(bunkerUrl);
-    } catch (error) {
-      setLocalError(error.message);
-    }
+    // If signer not yet available (modal closed via Cancel), nothing to do
   };
 
   if (loading) {
@@ -41,118 +36,13 @@ function LoginScreen() {
     );
   }
 
-  const displayError = localError || authError;
-
   return (
     <div className="app">
-      <Header activeServiceId="tasks" />
-      <div className="login-container">
-        <div className="login-card">
-          <img
-            src="/cloistr-icon.svg"
-            alt="Cloistr"
-            style={{ width: '80px', height: '80px', marginBottom: '16px' }}
-          />
-          <h1>Cloistr Tasks</h1>
-          <p>Daily task management with Nostr authentication</p>
-
-          {displayError && (
-            <div className="error-message" style={{
-              color: 'var(--cloistr-error)',
-              backgroundColor: 'color-mix(in srgb, var(--cloistr-error) 12%, var(--cloistr-bg-elevated))',
-              padding: '10px',
-              borderRadius: '4px',
-              marginBottom: '15px'
-            }}>
-              {displayError}
-            </div>
-          )}
-
-          <div className="login-methods">
-            {extensionAvailable ? (
-              <button
-                onClick={handleExtensionLogin}
-                className="btn btn-primary login-btn"
-                style={{ marginBottom: '10px' }}
-              >
-                Sign in with Nostr Extension
-              </button>
-            ) : (
-              <div style={{ marginBottom: '15px' }}>
-                <p style={{ color: 'var(--cloistr-text-muted)', fontSize: '14px' }}>
-                  No Nostr extension detected. Install{' '}
-                  <a href="https://getalby.com" target="_blank" rel="noopener noreferrer">Alby</a>,{' '}
-                  <a href="https://github.com/nickytonline/nos2x" target="_blank" rel="noopener noreferrer">nos2x</a>, or another NIP-07 extension.
-                </p>
-                <button
-                  onClick={handleExtensionLogin}
-                  className="btn btn-secondary login-btn"
-                  style={{ marginBottom: '10px', opacity: 0.7 }}
-                >
-                  Try Extension Login Anyway
-                </button>
-              </div>
-            )}
-
-            <div style={{ textAlign: 'center', margin: '15px 0', color: 'var(--cloistr-text-muted)' }}>
-              or
-            </div>
-
-            {!showBunker ? (
-              <button
-                onClick={() => setShowBunker(true)}
-                className="btn btn-secondary"
-                style={{ width: '100%' }}
-              >
-                Use Bunker (NIP-46)
-              </button>
-            ) : (
-              <div className="bunker-input" style={{ marginTop: '10px' }}>
-                <input
-                  type="text"
-                  placeholder="bunker://..."
-                  value={bunkerUrl}
-                  onChange={(e) => setBunkerUrl(e.target.value)}
-                  style={{
-                    width: '100%',
-                    padding: '10px',
-                    marginBottom: '10px',
-                    border: '1px solid var(--cloistr-border)',
-                    borderRadius: '4px',
-                    fontSize: '14px'
-                  }}
-                />
-                <div style={{ display: 'flex', gap: '10px' }}>
-                  <button
-                    onClick={handleBunkerLogin}
-                    className="btn btn-primary"
-                    style={{ flex: 1 }}
-                  >
-                    Connect
-                  </button>
-                  <button
-                    onClick={() => setShowBunker(false)}
-                    className="btn btn-secondary"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className="login-features" style={{ marginTop: '30px' }}>
-            <h3>Features:</h3>
-            <ul>
-              <li>Personal task lists and routines</li>
-              <li>Customizable reset schedules</li>
-              <li>Progress tracking and analytics</li>
-              <li>Secure Nostr-based authentication</li>
-              <li>No email or password required</li>
-            </ul>
-          </div>
-        </div>
-      </div>
+      <LoginModal
+        isOpen={true}
+        onClose={handleClose}
+        signerUrl={SIGNER_URL}
+      />
     </div>
   );
 }

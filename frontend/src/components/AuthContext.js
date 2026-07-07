@@ -5,6 +5,7 @@ import {
   waitForNostrExtension,
   authenticateWithExtension,
   authenticateWithBunker,
+  createAuthEvent,
   formatPubkey
 } from '../lib/nostr';
 import {
@@ -258,6 +259,63 @@ export const AuthProvider = ({ children }) => {
     }
   }, [API_BASE, scheduleTokenRefresh]);
 
+  // Login with an already-connected @cloistr/auth SignerInterface.
+  // Used by LoginScreen after LoginModal completes (NIP-07, NIP-46, or
+  // password+nostrconnect) so we never call connectNip07/connectNip46 twice.
+  const loginWithSigner = useCallback(async (signer) => {
+    setLoading(true);
+    setAuthError(null);
+
+    try {
+      const pubkey = await signer.getPublicKey();
+
+      // Challenge/sign/verify against the tasks backend
+      const challengeResponse = await fetch(`${API_BASE}/auth/challenge`);
+      if (!challengeResponse.ok) throw new Error('Failed to get challenge');
+      const { challenge, nonce } = await challengeResponse.json();
+
+      const unsignedEvent = createAuthEvent(pubkey, challenge, nonce);
+      const signedEvent = await signer.signEvent(unsignedEvent);
+
+      const verifyResponse = await fetch(`${API_BASE}/auth/verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ signedEvent })
+      });
+
+      if (!verifyResponse.ok) {
+        const err = await verifyResponse.json();
+        throw new Error(err.error || 'Authentication failed');
+      }
+
+      const authResult = await verifyResponse.json();
+
+      localStorage.setItem('access_token', authResult.access_token);
+      localStorage.setItem('token_expiry', authResult.expires_at);
+      localStorage.setItem('user_pubkey', authResult.user.pubkey);
+
+      setUser(authResult.user);
+      setToken(authResult.access_token);
+      setTokenExpiry(authResult.expires_at);
+
+      scheduleTokenRefresh(authResult.expires_at);
+
+      saveSharedSession({
+        method: 'nip07',
+        pubkey: authResult.user.pubkey,
+      });
+
+      console.log('LoginModal signer login successful for:', formatPubkey(authResult.user.pubkey));
+      return authResult;
+    } catch (error) {
+      console.error('loginWithSigner error:', error);
+      setAuthError(error.message);
+      throw error;
+    } finally {
+      setLoading(false);
+    }
+  }, [API_BASE, scheduleTokenRefresh]);
+
   // Logout
   const logout = useCallback(() => {
     console.log('Logging out');
@@ -345,6 +403,7 @@ export const AuthProvider = ({ children }) => {
     authError,
     loginWithExtension,
     loginWithBunker,
+    loginWithSigner,
     logout,
     isAuthenticated,
     getAuthHeaders,
