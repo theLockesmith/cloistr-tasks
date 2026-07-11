@@ -6,7 +6,7 @@
   "dependencies": {
     "@cloistr/auth": "^0.1.2",
     "@cloistr/collab-common": "^0.2.6",
-    "@cloistr/ui": "^0.12.7",
+    "@cloistr/ui": "^0.12.8",
     "nostr-tools": "^2.10.4",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
