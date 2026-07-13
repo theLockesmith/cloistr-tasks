@@ -21,6 +21,16 @@ const createPool = (dbName = 'postgres') => {
     user: process.env.DB_USER || 'postgres',
     password: process.env.DB_PASSWORD || 'postgres',
     ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
+    // Fail fast instead of hanging forever when a connection can't be
+    // acquired through pgbouncer (was surfacing as a silent 30s edge 504 on
+    // /api/auth/challenge with nothing logged). keepAlive detects sockets
+    // pgbouncer has closed; idle reaping keeps the client pool below
+    // pgbouncer's server_idle_timeout so we don't hold dead connections.
+    connectionTimeoutMillis: 10000,
+    idleTimeoutMillis: 30000,
+    max: 10,
+    keepAlive: true,
+    statement_timeout: 15000,
   });
 };
 
