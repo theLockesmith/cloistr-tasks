@@ -28,10 +28,19 @@ function AuthenticatedApp() {
 
   const [taskPreviews, setTaskPreviews] = useState({});
 
+  // Re-fetch all data when the active identity changes (key switch re-scopes
+  // the tasks backend JWT to a different pubkey via AuthContext's re-auth).
+  // Depend on user?.pubkey so a key switch causes a fresh load for the new
+  // identity without requiring a page reload. Reset transient UI state so
+  // stale data from the previous identity doesn't linger between renders.
   useEffect(() => {
+    setLists([]);
+    setSelectedList(null);
+    setTaskPreviews({});
+    setLoading(true);
     loadLists();
     loadUserSettings();
-  }, []);
+  }, [user?.pubkey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const theme = userSettings.theme === 'system' 

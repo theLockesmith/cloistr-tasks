@@ -1,5 +1,6 @@
 // src/components/AuthContext.js - Nostr Authentication Context
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import { useNostrAuth } from '@cloistr/auth';
 import {
   hasNostrExtension,
   waitForNostrExtension,
@@ -25,6 +26,9 @@ export const useAuth = () => {
 };
 
 export const AuthProvider = ({ children }) => {
+  // Track active Nostr key for re-scope on key switch (multi-identity support)
+  const { authState, signer: activeSigner } = useNostrAuth();
+
   const [user, setUser] = useState(null);
   const [token, setToken] = useState(null);
   const [tokenExpiry, setTokenExpiry] = useState(null);
@@ -394,6 +398,54 @@ export const AuthProvider = ({ children }) => {
       }
     };
   }, []);
+
+  // Re-scope on active-key change: when the Header key switcher changes
+  // authState.activePubkey, the stored JWT is stale for the new key. We
+  // re-run the challenge/verify flow to obtain a fresh JWT for the new
+  // identity and clear the old task data by resetting user state.
+  //
+  // Loop guard: skip if the new activePubkey already matches the JWT's pubkey
+  // (stored in localStorage as 'user_pubkey'). This prevents re-auth on the
+  // initial mount render when activePubkey and user_pubkey are already in sync,
+  // and prevents double-fires if the effect runs twice with the same key.
+  const activePubkeyRef = useRef(null);
+  useEffect(() => {
+    const newPubkey = authState.activePubkey;
+
+    // Not connected or no signer yet — nothing to re-scope
+    if (!newPubkey || !activeSigner) return;
+
+    // First render: record the active key without triggering re-auth.
+    // If we already have a valid JWT for this key (user is logged in), do not
+    // re-auth — that would clobber an existing valid session on mount.
+    if (activePubkeyRef.current === null) {
+      activePubkeyRef.current = newPubkey;
+      return;
+    }
+
+    // Key unchanged since last render — no switch occurred
+    if (newPubkey === activePubkeyRef.current) return;
+
+    // Key changed. Check if JWT already matches the new key (e.g. if the app
+    // reloaded with the right key already active).
+    const jwtPubkey = localStorage.getItem('user_pubkey');
+    if (newPubkey === jwtPubkey) {
+      activePubkeyRef.current = newPubkey;
+      return;
+    }
+
+    // New key that doesn't match the current JWT → re-auth.
+    const prevPubkey = activePubkeyRef.current;
+    activePubkeyRef.current = newPubkey;
+
+    console.log(`Key switch detected: ${prevPubkey?.slice(0, 8)} → ${newPubkey.slice(0, 8)}; re-authenticating with tasks backend`);
+
+    loginWithSigner(activeSigner).catch((err) => {
+      console.error('Re-auth after key switch failed:', err);
+      // Roll back ref so the next activePubkey change can retry
+      activePubkeyRef.current = prevPubkey;
+    });
+  }, [authState.activePubkey, activeSigner, loginWithSigner]);
 
   const value = {
     user,
