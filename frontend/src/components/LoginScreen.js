@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { LoginModal } from '@cloistr/ui/components';
+import { Header, LoginModal } from '@cloistr/ui/components';
 import { useNostrAuth } from '@cloistr/auth';
 import { useAuth } from './AuthContext';
 
@@ -55,6 +55,10 @@ function LoginScreen() {
 
   return (
     <div className="app">
+      {/* Unified chrome on the pre-auth landing too (logo, apps menu, theme).
+          auth={{authenticated:false}} with no onSignIn suppresses a redundant
+          Sign In button — the page's own LoginModal below handles login. */}
+      <Header activeServiceId="tasks" auth={{ authenticated: false }} signerUrl={SIGNER_URL} />
       <LoginModal
         isOpen={true}
         onClose={handleClose}
