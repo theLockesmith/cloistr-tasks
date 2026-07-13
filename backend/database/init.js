@@ -26,11 +26,15 @@ const createPool = (dbName = 'postgres') => {
     // /api/auth/challenge with nothing logged). keepAlive detects sockets
     // pgbouncer has closed; idle reaping keeps the client pool below
     // pgbouncer's server_idle_timeout so we don't hold dead connections.
+    // NOTE: do NOT set statement_timeout here — node-pg sends it as a startup
+    // parameter, which PgBouncer in transaction pooling mode rejects with
+    // "unsupported startup parameter: statement_timeout" (crashes init). If a
+    // statement timeout is needed, set it per-query via `SET LOCAL` or on the
+    // database role, not as a connection option.
     connectionTimeoutMillis: 10000,
     idleTimeoutMillis: 30000,
     max: 10,
     keepAlive: true,
-    statement_timeout: 15000,
   });
 };
 
