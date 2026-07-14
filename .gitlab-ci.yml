@@ -13,6 +13,9 @@ variables:
 include:
   - project: 'coldforge/ci-templates'
     ref: main
+    file: '/templates/kaniko-build.yml'
+  - project: 'coldforge/ci-templates'
+    ref: main
     file: '/templates/frontend-smoke.yml'
 
 # Auto-update @cloistr/ui when triggered from upstream
@@ -39,28 +42,21 @@ update-dependency:
         git push "https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git" HEAD:${CI_COMMIT_REF_NAME}
       fi
 
-.kaniko-auth: &kaniko-auth
-  before_script:
-    - mkdir -p /kaniko/.docker
-    - echo "{\"auths\":{\"${CI_REGISTRY}\":{\"username\":\"${CI_REGISTRY_USER}\",\"password\":\"${CI_REGISTRY_PASSWORD}\"}}}" > /kaniko/.docker/config.json
-
 build:backend:
+  extends: .kaniko-build
   stage: build
-  image:
-    name: gcr.io/kaniko-project/executor:debug
-    entrypoint: [""]
-  <<: *kaniko-auth
-  script:
-    - /kaniko/executor --context ${CI_PROJECT_DIR}/backend --dockerfile ${CI_PROJECT_DIR}/backend/Dockerfile --destination ${CI_REGISTRY_IMAGE}/backend:${CI_COMMIT_SHORT_SHA} --destination ${CI_REGISTRY_IMAGE}/backend:latest
+  variables:
+    KANIKO_CONTEXT_SUBDIR: "/backend"
+    KANIKO_DOCKERFILE_SUBPATH: "/backend/Dockerfile"
+    KANIKO_IMAGE: "$CI_REGISTRY_IMAGE/backend"
 
 build:frontend:
+  extends: .kaniko-build
   stage: build
-  image:
-    name: gcr.io/kaniko-project/executor:debug
-    entrypoint: [""]
-  <<: *kaniko-auth
-  script:
-    - /kaniko/executor --context ${CI_PROJECT_DIR}/frontend --dockerfile ${CI_PROJECT_DIR}/frontend/Dockerfile --destination ${CI_REGISTRY_IMAGE}/frontend:${CI_COMMIT_SHORT_SHA} --destination ${CI_REGISTRY_IMAGE}/frontend:latest
+  variables:
+    KANIKO_CONTEXT_SUBDIR: "/frontend"
+    KANIKO_DOCKERFILE_SUBPATH: "/frontend/Dockerfile"
+    KANIKO_IMAGE: "$CI_REGISTRY_IMAGE/frontend"
 
 # Smoke-test: load frontend image in real Chromium, fail on console errors / blank page
 smoke-test:
