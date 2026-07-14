@@ -69,20 +69,12 @@
       <div class="loading-text">Loading...</div>
     </div>
 
-    <!-- Service Worker Registration -->
-    <script>
-      if ('serviceWorker' in navigator) {
-        window.addEventListener('load', () => {
-          navigator.serviceWorker.register('/sw.js')
-            .then((registration) => {
-              console.log('SW registered: ', registration);
-            })
-            .catch((registrationError) => {
-              console.log('SW registration failed: ', registrationError);
-            });
-        });
-      }
-    </script>
+    <!--
+      No service worker is shipped (no VitePWA/workbox build step), so the old
+      unconditional register('/sw.js') always 404'd → SPA fallback served
+      index.html → the browser tried to parse HTML as a SW script and failed
+      installation. Registration removed until a real offline strategy exists.
+    -->
     <script type="module" src="/src/index.js"></script>
   </body>
 </html>
