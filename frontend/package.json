@@ -5,7 +5,7 @@
   "private": true,
   "dependencies": {
     "@cloistr/auth": "^0.4.0",
-    "@cloistr/collab-common": "^0.2.12",
+    "@cloistr/collab-common": "^0.2.14",
     "@cloistr/ui": "^0.20.2",
     "nostr-tools": "^2.10.4",
     "react": "^18.2.0",
