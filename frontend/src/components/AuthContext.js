@@ -288,8 +288,26 @@ export const AuthProvider = ({ children }) => {
       });
 
       if (!verifyResponse.ok) {
-        const err = await verifyResponse.json();
-        throw new Error(err.error || 'Authentication failed');
+        // The error path must not assume JSON. A gateway 504 returns an HTML
+        // page, and `await verifyResponse.json()` then threw
+        //   SyntaxError: Unexpected token '<', "<html><bod"...
+        // which MASKED the real problem — observed in production while the
+        // cluster was stalling. Report the status, and use a parsed body only
+        // when there actually is one.
+        const raw = await verifyResponse.text().catch(() => '');
+        let detail = '';
+        try {
+          detail = JSON.parse(raw).error || '';
+        } catch {
+          detail = raw.slice(0, 120);
+        }
+        const err = new Error(
+          `Authentication failed: HTTP ${verifyResponse.status}${detail ? ` — ${detail}` : ''}`,
+        );
+        // Mark server/gateway failures so callers can retry them rather than
+        // treating them as a rejected identity.
+        err.transient = verifyResponse.status >= 500;
+        throw err;
       }
 
       const authResult = await verifyResponse.json();
@@ -448,10 +466,32 @@ export const AuthProvider = ({ children }) => {
 
       // Shared session restored but tasks has no usable JWT for it: exchange
       // the signer for one instead of showing a sign-in screen.
-      loginWithSigner(activeSigner).catch((err) => {
-        console.error('Initial auth from restored shared session failed:', err);
-        activePubkeyRef.current = null; // let the next change retry
-      });
+      // Retried with backoff, because the tasks backend intermittently returns
+      // 504 while the cluster is stalling. Measured over 8 production loads:
+      // the exchange fired every time, 1 succeeded, 7 died on a gateway 504.
+      // Without a retry a single blip drops the user onto a sign-in screen
+      // despite a perfectly valid session — the exact symptom this change set
+      // exists to remove.
+      const attemptAuth = async () => {
+        const delays = [0, 1500, 4000];
+        let lastError;
+        for (const wait of delays) {
+          if (wait) await new Promise((r) => setTimeout(r, wait));
+          try {
+            await loginWithSigner(activeSigner);
+            return;
+          } catch (err) {
+            lastError = err;
+            // A rejected identity will not become valid on a retry; only
+            // server and network failures are worth repeating.
+            if (!err?.transient && err?.name !== 'TypeError') break;
+          }
+        }
+        console.error('Initial auth from restored shared session failed:', lastError);
+        activePubkeyRef.current = null; // let the next key change retry
+      };
+
+      attemptAuth();
       return;
     }
 
