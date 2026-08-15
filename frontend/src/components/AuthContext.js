@@ -415,11 +415,43 @@ export const AuthProvider = ({ children }) => {
     // Not connected or no signer yet — nothing to re-scope
     if (!newPubkey || !activeSigner) return;
 
-    // First render: record the active key without triggering re-auth.
-    // If we already have a valid JWT for this key (user is logged in), do not
-    // re-auth — that would clobber an existing valid session on mount.
+    // First observation of an active key.
+    //
+    // This used to record the key and return UNCONDITIONALLY, which meant a
+    // user arriving with a restored shared session was never logged in to
+    // tasks: SharedAuthProvider completes the NIP-46 restore, activePubkey
+    // appears, this effect files it away, no key "switch" ever follows, and
+    // AuthContext still holds no JWT — so AppContent renders LoginScreen to
+    // someone who is demonstrably signed in.
+    //
+    // Measured against production before this change: POST
+    // /api/v1/nostrconnect/session returned 200 on 6 of 6 loads, the relay
+    // websocket opened every time, and all 6 still showed the sign-in screen.
+    // The network path was never the problem here.
+    //
+    // The guard's real intent was only to avoid clobbering an ALREADY VALID
+    // session on mount. Keep exactly that, and otherwise authenticate.
     if (activePubkeyRef.current === null) {
       activePubkeyRef.current = newPubkey;
+
+      const storedPubkey = localStorage.getItem('user_pubkey');
+      const storedToken = localStorage.getItem('access_token');
+      const storedExpiry = localStorage.getItem('token_expiry');
+      const jwtIsUsable =
+        !!storedToken &&
+        storedPubkey === newPubkey &&
+        !!storedExpiry &&
+        new Date(storedExpiry) > new Date();
+
+      // Already signed in to tasks with this key — leave it alone.
+      if (jwtIsUsable) return;
+
+      // Shared session restored but tasks has no usable JWT for it: exchange
+      // the signer for one instead of showing a sign-in screen.
+      loginWithSigner(activeSigner).catch((err) => {
+        console.error('Initial auth from restored shared session failed:', err);
+        activePubkeyRef.current = null; // let the next change retry
+      });
       return;
     }
 
