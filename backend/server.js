@@ -549,10 +549,111 @@ app.post('/api/lists', authenticateToken, async (req, res) => {
 });
 
 // Add task template to list (with ownership check)
+// An HTML form sends "" for a field the user left blank, and Postgres cannot
+// cast "" to integer or date — it raises, and the handler's catch turns that
+// into a bare 500. Leaving the optional "Minutes" field empty therefore made
+// task creation fail outright, which is the common case rather than an edge
+// case. Normalise "" to NULL for every optional column.
+const emptyToNull = (v) => (v === undefined || v === null || v === '' ? null : v);
+
+const toIntOrNull = (v) => {
+  const base = emptyToNull(v);
+  if (base === null) return null;
+  const n = Number(base);
+  return Number.isFinite(n) ? Math.trunc(n) : null;
+};
+
+// Update a task list. The UI has had an Edit List dialog and drag-to-reorder
+// for a while; both call PUT /api/lists/:id, which did not exist — every rename
+// and every reorder returned 404 and surfaced as "Failed to update list".
+app.put('/api/lists/:listId', authenticateToken, async (req, res) => {
+  try {
+    const { listId } = req.params;
+    const { name, description, icon, color, sortOrder } = req.body;
+
+    const ownership = await pool.query('SELECT user_id FROM task_lists WHERE id = $1', [listId]);
+    if (ownership.rows.length === 0) {
+      return res.status(404).json({ error: 'List not found' });
+    }
+    if (ownership.rows[0].user_id !== req.user.id) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    // COALESCE so a partial update (reorder sends only sortOrder) does not wipe
+    // the fields it did not mention.
+    const result = await pool.query(`
+      UPDATE task_lists
+      SET name        = COALESCE($1, name),
+          description = COALESCE($2, description),
+          icon        = COALESCE($3, icon),
+          color       = COALESCE($4, color),
+          sort_order  = COALESCE($5, sort_order)
+      WHERE id = $6 AND user_id = $7
+      RETURNING *
+    `, [
+      name === undefined || name === '' ? null : String(name).trim(),
+      emptyToNull(description),
+      emptyToNull(icon),
+      emptyToNull(color),
+      toIntOrNull(sortOrder),
+      listId,
+      req.user.id,
+    ]);
+
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error updating task list:', error);
+    res.status(500).json({ error: 'Failed to update task list' });
+  }
+});
+
+// Delete a task list. The Edit List dialog has offered a Delete List button
+// with a confirmation prompt; DELETE /api/lists/:id did not exist, so the list
+// always survived and the user got "Failed to delete list".
+app.delete('/api/lists/:listId', authenticateToken, async (req, res) => {
+  try {
+    const { listId } = req.params;
+
+    const ownership = await pool.query('SELECT user_id FROM task_lists WHERE id = $1', [listId]);
+    if (ownership.rows.length === 0) {
+      return res.status(404).json({ error: 'List not found' });
+    }
+    if (ownership.rows[0].user_id !== req.user.id) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    // Delete children explicitly rather than relying on a cascade that may not
+    // be declared on every deployment's schema. Wrapped in a transaction so a
+    // failure part-way cannot leave orphaned tasks pointing at a dead list.
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM tasks WHERE list_id = $1', [listId]);
+      await client.query('DELETE FROM task_templates WHERE list_id = $1', [listId]);
+      await client.query('DELETE FROM task_lists WHERE id = $1 AND user_id = $2', [listId, req.user.id]);
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    res.status(204).send();
+  } catch (error) {
+    console.error('Error deleting task list:', error);
+    res.status(500).json({ error: 'Failed to delete task list' });
+  }
+});
+
 app.post('/api/lists/:listId/templates', authenticateToken, async (req, res) => {
   try {
     const { listId } = req.params;
     const { name, description, timeSlot, estimatedMinutes, priority, dueDate } = req.body;
+
+    if (!name || !String(name).trim()) {
+      return res.status(400).json({ error: 'Task name is required' });
+    }
 
     // Check ownership inline
     const ownershipCheck = await pool.query('SELECT user_id FROM task_lists WHERE id = $1', [listId]);
@@ -572,7 +673,15 @@ app.post('/api/lists/:listId/templates', authenticateToken, async (req, res) => 
         WHERE list_id = $1
       ))
       RETURNING *
-    `, [listId, name, description, timeSlot, estimatedMinutes, priority || 'medium', dueDate || null]);
+    `, [
+      listId,
+      String(name).trim(),
+      emptyToNull(description),
+      emptyToNull(timeSlot),
+      toIntOrNull(estimatedMinutes),
+      priority || 'medium',
+      emptyToNull(dueDate),
+    ]);
     
     const newTemplate = templateResult.rows[0];
     
