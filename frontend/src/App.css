@@ -1031,3 +1031,73 @@ body {
   background: color-mix(in srgb, var(--cloistr-error) 15%, transparent);
   color: var(--cloistr-error);
 }
+/* ── Task metadata row (priority badge + due date) ── */
+
+.task-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.35rem;
+}
+
+.due-date-badge {
+  padding: 0.15rem 0.5rem;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--text-secondary) 12%, transparent);
+  color: var(--text-secondary);
+}
+
+.due-date-badge.overdue {
+  background: color-mix(in srgb, var(--cloistr-error) 15%, transparent);
+  color: var(--cloistr-error);
+}
+
+.due-date-badge.soon {
+  background: color-mix(in srgb, var(--cloistr-warning) 15%, transparent);
+  color: var(--cloistr-warning);
+}
+
+/* ── Task search and filter bar ── */
+
+.task-filters {
+  display: flex;
+  gap: 0.6rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+
+.task-search {
+  flex: 1;
+  min-width: 140px;
+  padding: 0.45rem 0.75rem;
+  border: 1.5px solid var(--border);
+  border-radius: 8px;
+  background: var(--background);
+  color: var(--text);
+  font-size: 0.9rem;
+  transition: border-color 0.15s;
+}
+
+.task-search:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+.task-filter-priority {
+  padding: 0.45rem 0.65rem;
+  border: 1.5px solid var(--border);
+  border-radius: 8px;
+  background: var(--background);
+  color: var(--text);
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.task-filter-priority:focus {
+  outline: none;
+  border-color: var(--primary);
+}

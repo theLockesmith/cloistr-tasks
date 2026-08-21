@@ -12,6 +12,8 @@ function TaskListModal({ list, onClose, apiCall, user, onTasksUpdated }) {
   const [showAddTask, setShowAddTask] = useState(false);
   const [selectedTask, setSelectedTask] = useState(null);
   const [showEditList, setShowEditList] = useState(false);
+  const [filterText, setFilterText] = useState('');
+  const [filterPriority, setFilterPriority] = useState('all');
 
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -134,7 +136,27 @@ function TaskListModal({ list, onClose, apiCall, user, onTasksUpdated }) {
 
   const completionPercentage = getCompletionPercentage();
   const completedTasks = tasks.filter(task => task.completed_at);
-  const incompleteTasks = tasks.filter(task => !task.completed_at);
+
+  // Apply text and priority filters.  Filtering is client-side: we always
+  // fetch the full list from the server and narrow it here so the user can
+  // clear the filter and get everything back without a round-trip.
+  const today = new Date().toISOString().split('T')[0];
+  const filteredTasks = tasks.filter(task => {
+    if (filterPriority === 'overdue') {
+      const dd = task.due_date ? task.due_date.split('T')[0] : null;
+      if (!dd || dd >= today) return false;
+    } else if (filterPriority !== 'all') {
+      if (task.priority !== filterPriority) return false;
+    }
+    if (filterText) {
+      const q = filterText.toLowerCase();
+      const nameMatch = (task.template_name || '').toLowerCase().includes(q);
+      const descMatch = (task.template_description || '').toLowerCase().includes(q);
+      if (!nameMatch && !descMatch) return false;
+    }
+    return true;
+  });
+  const isFiltering = filterText !== '' || filterPriority !== 'all';
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -178,20 +200,50 @@ function TaskListModal({ list, onClose, apiCall, user, onTasksUpdated }) {
           </div>
         </div>
 
+        <div className="task-filters">
+          <input
+            type="search"
+            className="task-search"
+            placeholder="Search tasks..."
+            value={filterText}
+            onChange={e => setFilterText(e.target.value)}
+            aria-label="Search tasks"
+          />
+          <select
+            className="task-filter-priority"
+            value={filterPriority}
+            onChange={e => setFilterPriority(e.target.value)}
+            aria-label="Filter by priority"
+          >
+            <option value="all">All priorities</option>
+            <option value="high">High</option>
+            <option value="medium">Medium</option>
+            <option value="low">Low</option>
+            <option value="overdue">Overdue</option>
+          </select>
+        </div>
+
         <div className="tasks-container">
           {tasks.length === 0 ? (
             <div className="empty-state">
               <p>No tasks for today. Add some tasks to get started!</p>
             </div>
+          ) : filteredTasks.length === 0 ? (
+            <div className="empty-state">
+              <p>No tasks match your filter.</p>
+              <button className="btn btn-secondary btn-small" onClick={() => { setFilterText(''); setFilterPriority('all'); }}>
+                Clear filter
+              </button>
+            </div>
           ) : (
             <DragDropList
-              items={tasks}
-              onReorder={reorderTasks}
+              items={filteredTasks}
+              onReorder={isFiltering ? () => {} : reorderTasks}
               itemKey="id"
               renderItem={(task) => (
-                <TaskItem 
-                  task={task} 
-                  onToggle={toggleTask} 
+                <TaskItem
+                  task={task}
+                  onToggle={toggleTask}
                   onEdit={setSelectedTask}
                 />
               )}
