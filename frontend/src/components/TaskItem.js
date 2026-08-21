@@ -5,6 +5,9 @@ import { formatDueDate, normaliseLabels, parseSubtaskCount } from '../lib/taskHe
 // Priority labels and their CSS class suffix (maps to .priority-badge--{level} in App.css)
 const PRIORITY_LABELS = { low: 'Low', medium: 'Medium', high: 'High' };
 
+// Priority labels and their CSS class suffix (maps to .priority-badge--{level} in App.css)
+const PRIORITY_LABELS = { low: 'Low', medium: 'Medium', high: 'High' };
+
 function TaskItem({ task, onToggle, onEdit }) {
   const formatTime = (timeSlot) => {
     if (!timeSlot) return '';
