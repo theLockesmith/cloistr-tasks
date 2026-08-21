@@ -1,3 +1,9 @@
 CLAUDE.md
 .claude
 .claude/
+
+# Build output. 22 files under frontend/dist were committed on this branch,
+# which makes every build produce a spurious diff and lets a stale bundle be
+# reviewed as though it were source.
+dist/
+frontend/dist/
