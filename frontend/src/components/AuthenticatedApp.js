@@ -6,6 +6,7 @@ import UserSettings from './UserSettings';
 import AddListModal from './AddListModal';
 import AddTaskModal from './AddTaskModal';
 import DragDropList from './DragDropList';
+import LabelManager from './LabelManager';
 
 function AuthenticatedApp() {
   const { user, logout, apiCall, formatPubkey } = useAuth();
@@ -15,6 +16,7 @@ function AuthenticatedApp() {
   const [showAddList, setShowAddList] = useState(false);
   const [showAddTask, setShowAddTask] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showLabelManager, setShowLabelManager] = useState(false);
   
   const [userSettings, setUserSettings] = useState({
     previewTaskCount: 5,
@@ -225,13 +227,22 @@ function AuthenticatedApp() {
         <div className="page-header">
           <h1>Daily Task Manager</h1>
           <p className="date">{getCurrentDate()}</p>
-          <button
-            className="btn btn-secondary btn-small"
-            onClick={() => setShowSettings(true)}
-            title="Settings"
-          >
-            ⚙ Settings
-          </button>
+          <div className="page-header-actions">
+            <button
+              className="btn btn-secondary btn-small"
+              onClick={() => setShowLabelManager(true)}
+              title="Manage Labels"
+            >
+              🏷 Labels
+            </button>
+            <button
+              className="btn btn-secondary btn-small"
+              onClick={() => setShowSettings(true)}
+              title="Settings"
+            >
+              ⚙ Settings
+            </button>
+          </div>
         </div>
         <div className="dashboard">
           <div className="dashboard-header">
@@ -427,6 +438,13 @@ function AuthenticatedApp() {
           onSettingsUpdate={() => {
             loadLists();
           }}
+        />
+      )}
+
+      {showLabelManager && (
+        <LabelManager
+          apiCall={apiCall}
+          onClose={() => setShowLabelManager(false)}
         />
       )}
 

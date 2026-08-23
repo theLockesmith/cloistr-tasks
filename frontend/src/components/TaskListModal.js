@@ -14,6 +14,8 @@ function TaskListModal({ list, onClose, apiCall, user, onTasksUpdated }) {
   const [showEditList, setShowEditList] = useState(false);
   const [filterText, setFilterText] = useState('');
   const [filterPriority, setFilterPriority] = useState('all');
+  const [filterLabelId, setFilterLabelId] = useState('');
+  const [availableLabels, setAvailableLabels] = useState([]);
 
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -27,8 +29,17 @@ function TaskListModal({ list, onClose, apiCall, user, onTasksUpdated }) {
   useEffect(() => {
     if (list) {
       loadTasks();
+      // Load user labels for the filter bar
+      (async () => {
+        try {
+          const res = await apiCall('/labels');
+          if (res.ok) setAvailableLabels(await res.json());
+        } catch (e) {
+          console.error('Error loading labels:', e);
+        }
+      })();
     }
-  }, [list]);
+  }, [list]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadTasks = async () => {
     if (!list) return;
@@ -137,9 +148,9 @@ function TaskListModal({ list, onClose, apiCall, user, onTasksUpdated }) {
   const completionPercentage = getCompletionPercentage();
   const completedTasks = tasks.filter(task => task.completed_at);
 
-  // Apply text and priority filters.  Filtering is client-side: we always
-  // fetch the full list from the server and narrow it here so the user can
-  // clear the filter and get everything back without a round-trip.
+  // Apply text, priority, and label filters.  Filtering is client-side: we
+  // always fetch the full list from the server and narrow it here so the user
+  // can clear the filter and get everything back without a round-trip.
   const today = new Date().toISOString().split('T')[0];
   const filteredTasks = tasks.filter(task => {
     if (filterPriority === 'overdue') {
@@ -154,9 +165,14 @@ function TaskListModal({ list, onClose, apiCall, user, onTasksUpdated }) {
       const descMatch = (task.template_description || '').toLowerCase().includes(q);
       if (!nameMatch && !descMatch) return false;
     }
+    if (filterLabelId) {
+      const lblId = Number(filterLabelId);
+      const taskLabels = Array.isArray(task.labels) ? task.labels : [];
+      if (!taskLabels.find(l => l.id === lblId)) return false;
+    }
     return true;
   });
-  const isFiltering = filterText !== '' || filterPriority !== 'all';
+  const isFiltering = filterText !== '' || filterPriority !== 'all' || filterLabelId !== '';
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -221,6 +237,19 @@ function TaskListModal({ list, onClose, apiCall, user, onTasksUpdated }) {
             <option value="low">Low</option>
             <option value="overdue">Overdue</option>
           </select>
+          {availableLabels.length > 0 && (
+            <select
+              className="task-filter-priority"
+              value={filterLabelId}
+              onChange={e => setFilterLabelId(e.target.value)}
+              aria-label="Filter by label"
+            >
+              <option value="">All labels</option>
+              {availableLabels.map(l => (
+                <option key={l.id} value={l.id}>{l.name}</option>
+              ))}
+            </select>
+          )}
         </div>
 
         <div className="tasks-container">
@@ -231,7 +260,7 @@ function TaskListModal({ list, onClose, apiCall, user, onTasksUpdated }) {
           ) : filteredTasks.length === 0 ? (
             <div className="empty-state">
               <p>No tasks match your filter.</p>
-              <button className="btn btn-secondary btn-small" onClick={() => { setFilterText(''); setFilterPriority('all'); }}>
+              <button className="btn btn-secondary btn-small" onClick={() => { setFilterText(''); setFilterPriority('all'); setFilterLabelId(''); }}>
                 Clear filter
               </button>
             </div>

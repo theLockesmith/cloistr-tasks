@@ -1,4 +1,5 @@
 import React from 'react';
+import LabelChip from './LabelChip';
 
 // Priority labels and their CSS class suffix (maps to .priority-badge--{level} in App.css)
 const PRIORITY_LABELS = { low: 'Low', medium: 'Medium', high: 'High' };
@@ -29,6 +30,9 @@ function TaskItem({ task, onToggle, onEdit }) {
 
   const dueInfo = formatDueDate(task.due_date);
   const showPriority = task.priority && task.priority !== 'medium';
+  const taskLabels = Array.isArray(task.labels) ? task.labels : [];
+  const subtaskCount = Number(task.subtask_count) || 0;
+  const hasReminder = task.reminder_offset_minutes != null && (task.due_date || task.time_slot);
 
   return (
     <div
@@ -54,6 +58,16 @@ function TaskItem({ task, onToggle, onEdit }) {
           <h4>{task.template_name}</h4>
           {task.time_slot && (
             <span className="task-time">{formatTime(task.time_slot)}</span>
+          )}
+          {subtaskCount > 0 && (
+            <span className="subtask-count-badge" title={subtaskCount + ' sub-task' + (subtaskCount !== 1 ? 's' : '')}>
+              {subtaskCount} sub
+            </span>
+          )}
+          {hasReminder && (
+            <span className="reminder-badge" title={'Reminder: ' + task.reminder_offset_minutes + ' min before'}>
+              🔔
+            </span>
           )}
         </div>
 
@@ -81,6 +95,10 @@ function TaskItem({ task, onToggle, onEdit }) {
               {dueInfo.label}
             </span>
           )}
+
+          {taskLabels.map((label) => (
+            <LabelChip key={label.id} label={label} />
+          ))}
         </div>
       </div>
 
