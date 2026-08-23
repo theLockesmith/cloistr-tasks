@@ -8,6 +8,7 @@ import dotenv from 'dotenv';
 import promClient from 'prom-client';
 
 import { initializeDatabase, createPool, createAppPool } from './database/init.js';
+import { emptyToNull, toIntOrNull } from './utils.js';
 import { authenticateToken, optionalAuth, requireOwnership, issueJWT } from './middleware/auth.js';
 
 // Import nostr-tools for signature verification
@@ -532,17 +533,7 @@ app.post('/api/tasks/:taskId/toggle', authenticateToken, async (req, res) => {
   }
 });
 
-// Normalise empty strings to NULL so Postgres does not reject an optional
-// field with an empty string where it expects a typed value (e.g. integer,
-// date).  toIntOrNull also handles the numeric coercion.
-const emptyToNull = (v) => (v === undefined || v === null || v === '' ? null : v);
-
-const toIntOrNull = (v) => {
-  const base = emptyToNull(v);
-  if (base === null) return null;
-  const n = Number(base);
-  return Number.isFinite(n) ? Math.trunc(n) : null;
-};
+// emptyToNull and toIntOrNull imported from ./utils.js
 
 // Create new task list (user-specific)
 app.post('/api/lists', authenticateToken, async (req, res) => {

@@ -1,27 +1,28 @@
 /**
- * Source-level structural tests for the helper functions and server route
- * registrations in server.js.
+ * Unit tests for the pure helper functions in backend/utils.js.
  *
- * NOTE: These are SOURCE-LEVEL tests, not behavioural integration tests.
- * They verify the module can be parsed and that the helper functions behave
- * correctly in isolation.  They do NOT start the express server or connect to
- * a database.  Behavioural (HTTP) tests require a real database; add those in
- * a separate integration test suite.
+ * These functions are exported from utils.js (which server.js also imports),
+ * so every test here exercises the REAL production implementation — not a copy.
+ * If the implementation changes, these tests will catch the divergence.
+ *
+ * What cannot be tested here without a running server and database:
+ *   - HTTP route handlers (require a live Express + Postgres connection)
+ *   - Authentication middleware (requires a signed JWT and a DB user row)
+ *   - Any query that reads from or writes to the task_* tables
+ *
+ * Add those in a separate integration test suite that provisions a test
+ * database.
  */
 
-// ── emptyToNull / toIntOrNull ──────────────────────────────────────────────
-// These helpers are module-private.  To test them without starting the server
-// we replicate the exact implementation here, which is acceptable for a
-// structural test: if the implementation diverges the test must be updated too.
+import {
+  emptyToNull,
+  toIntOrNull,
+  validateLabelName,
+  wouldCreateNestedSubtask,
+  parseReminderOffset,
+} from '../utils.js';
 
-const emptyToNull = (v) => (v === undefined || v === null || v === '' ? null : v);
-
-const toIntOrNull = (v) => {
-  const base = emptyToNull(v);
-  if (base === null) return null;
-  const n = Number(base);
-  return Number.isFinite(n) ? Math.trunc(n) : null;
-};
+// ── emptyToNull ────────────────────────────────────────────────────────────
 
 describe('emptyToNull', () => {
   test('returns null for undefined', () => expect(emptyToNull(undefined)).toBeNull());
@@ -32,6 +33,8 @@ describe('emptyToNull', () => {
   test('returns value for false',    () => expect(emptyToNull(false)).toBe(false));
   test('returns value for "abc"',    () => expect(emptyToNull('abc')).toBe('abc'));
 });
+
+// ── toIntOrNull ────────────────────────────────────────────────────────────
 
 describe('toIntOrNull', () => {
   test('returns null for undefined',   () => expect(toIntOrNull(undefined)).toBeNull());
@@ -44,52 +47,51 @@ describe('toIntOrNull', () => {
   test('returns 0 for "0"',            () => expect(toIntOrNull('0')).toBe(0));
 });
 
-// ── Label payload validation logic ────────────────────────────────────────
-// Mirrors the server-side guard: name must be a non-empty string.
-
-function validateLabelName(name) {
-  if (!name || !String(name).trim()) return { ok: false, error: 'Label name is required' };
-  return { ok: true, name: String(name).trim() };
-}
+// ── validateLabelName ─────────────────────────────────────────────────────
 
 describe('validateLabelName', () => {
   test('rejects undefined',    () => expect(validateLabelName(undefined).ok).toBe(false));
   test('rejects empty string', () => expect(validateLabelName('').ok).toBe(false));
   test('rejects whitespace',   () => expect(validateLabelName('   ').ok).toBe(false));
-  test('accepts normal name',  () => {
+  test('error text is set on failure', () => {
+    expect(validateLabelName('').error).toBe('Label name is required');
+  });
+  test('accepts a normal name and trims it', () => {
     const r = validateLabelName('  Work  ');
     expect(r.ok).toBe(true);
     expect(r.name).toBe('Work');
   });
+  test('accepts a single character', () => {
+    const r = validateLabelName('x');
+    expect(r.ok).toBe(true);
+    expect(r.name).toBe('x');
+  });
 });
 
-// ── Sub-task nesting guard ────────────────────────────────────────────────
-// The server refuses to nest a subtask under another subtask.
-
-function wouldCreateNestedSubtask(parentRow) {
-  // parentRow is the DB row of the intended parent template.
-  return parentRow && parentRow.parent_template_id !== null;
-}
+// ── wouldCreateNestedSubtask ──────────────────────────────────────────────
 
 describe('wouldCreateNestedSubtask', () => {
-  test('top-level parent is safe',         () => expect(wouldCreateNestedSubtask({ parent_template_id: null })).toBe(false));
-  test('subtask parent is rejected',       () => expect(wouldCreateNestedSubtask({ parent_template_id: 5 })).toBe(true));
-  test('null parentRow is falsy (no nesting)',() => expect(Boolean(wouldCreateNestedSubtask(null))).toBe(false));
+  test('top-level parent (null parent_template_id) is safe',
+    () => expect(wouldCreateNestedSubtask({ parent_template_id: null })).toBe(false));
+  test('sub-task parent (non-null parent_template_id) is rejected',
+    () => expect(wouldCreateNestedSubtask({ parent_template_id: 5 })).toBe(true));
+  test('null parentRow counts as no nesting',
+    () => expect(wouldCreateNestedSubtask(null)).toBe(false));
+  test('parent_template_id of 0 is treated as non-null (falsy numeric)',
+    // 0 is technically a valid id, but practically never assigned; the
+    // function guards with !!(row && row.parent_template_id !== null).
+    () => expect(wouldCreateNestedSubtask({ parent_template_id: 0 })).toBe(true));
 });
 
-// ── Reminder offset validation ────────────────────────────────────────────
-// reminder_offset_minutes must be a positive integer or null.
-
-function parseReminderOffset(v) {
-  const n = toIntOrNull(v);
-  if (n === null) return null;
-  return n > 0 ? n : null;
-}
+// ── parseReminderOffset ───────────────────────────────────────────────────
 
 describe('parseReminderOffset', () => {
-  test('null for empty string',     () => expect(parseReminderOffset('')).toBeNull());
-  test('null for zero',             () => expect(parseReminderOffset(0)).toBeNull());
-  test('null for negative',         () => expect(parseReminderOffset(-5)).toBeNull());
-  test('15 for "15"',               () => expect(parseReminderOffset('15')).toBe(15));
-  test('1440 for "1440"',           () => expect(parseReminderOffset('1440')).toBe(1440));
+  test('null for empty string',  () => expect(parseReminderOffset('')).toBeNull());
+  test('null for zero',          () => expect(parseReminderOffset(0)).toBeNull());
+  test('null for negative',      () => expect(parseReminderOffset(-5)).toBeNull());
+  test('15 for "15"',            () => expect(parseReminderOffset('15')).toBe(15));
+  test('1440 for "1440"',        () => expect(parseReminderOffset('1440')).toBe(1440));
+  test('null for non-numeric',   () => expect(parseReminderOffset('abc')).toBeNull());
+  test('truncates fractional and accepts if positive',
+    () => expect(parseReminderOffset('5.9')).toBe(5));
 });

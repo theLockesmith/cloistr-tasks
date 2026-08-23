@@ -1,5 +1,6 @@
 import React from 'react';
 import LabelChip from './LabelChip';
+import { formatDueDate, normaliseLabels, parseSubtaskCount } from '../lib/taskHelpers';
 
 // Priority labels and their CSS class suffix (maps to .priority-badge--{level} in App.css)
 const PRIORITY_LABELS = { low: 'Low', medium: 'Medium', high: 'High' };
@@ -11,27 +12,10 @@ function TaskItem({ task, onToggle, onEdit }) {
     return timeSlot.charAt(0).toUpperCase() + timeSlot.slice(1);
   };
 
-  // Format a DATE string (YYYY-MM-DD or ISO timestamp) as a short, human-readable
-  // label.  We compare against today in local time so "today" and "overdue"
-  // are always relative to the viewer's clock.
-  const formatDueDate = (rawDate) => {
-    if (!rawDate) return null;
-    // The DB returns a DATE which pg serialises as a full ISO timestamp at
-    // midnight UTC.  Strip the time part so the comparison is date-only.
-    const dateStr = rawDate.split('T')[0];
-    const today = new Date().toISOString().split('T')[0];
-    if (dateStr === today) return { label: 'Due today', overdue: false, soon: true };
-    if (dateStr < today) return { label: 'Overdue', overdue: true, soon: false };
-    // Within the next 3 days counts as "soon"
-    const daysAhead = (new Date(dateStr) - new Date(today)) / 86400000;
-    const label = new Date(dateStr + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-    return { label, overdue: false, soon: daysAhead <= 3 };
-  };
-
   const dueInfo = formatDueDate(task.due_date);
   const showPriority = task.priority && task.priority !== 'medium';
-  const taskLabels = Array.isArray(task.labels) ? task.labels : [];
-  const subtaskCount = Number(task.subtask_count) || 0;
+  const taskLabels = normaliseLabels(task.labels);
+  const subtaskCount = parseSubtaskCount(task.subtask_count);
   const hasReminder = task.reminder_offset_minutes != null && (task.due_date || task.time_slot);
 
   return (

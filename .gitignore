@@ -7,3 +7,6 @@ CLAUDE.md
 # reviewed as though it were source.
 dist/
 frontend/dist/
+
+# Editor/tool backup files
+*.bak
