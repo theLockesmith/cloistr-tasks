@@ -17,25 +17,26 @@ FROM nginxinc/nginx-unprivileged:alpine
 # Copy built assets
 COPY --from=build /app/dist /usr/share/nginx/html
 
-# Copy nginx config for SPA routing + API proxy (non-root, port 8080)
+# nginx config for SPA routing + API proxy (non-root, port 8080).
+#
+# The config lives in a TEMPLATE, not an inlined literal, so the API upstream can
+# be a variable. See frontend/default.conf.template for the full reasoning: an
+# inlined literal upstream made nginx resolve the backend Service name at startup
+# and refuse to boot anywhere that name does not resolve.
 USER root
-RUN echo 'server { \
-    listen 8080; \
-    location /api/ { \
-        proxy_pass http://cloistr-tasks-backend.cloistr.svc.cluster.local:80; \
-        proxy_http_version 1.1; \
-        proxy_set_header Host $host; \
-        proxy_set_header X-Real-IP $remote_addr; \
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; \
-        proxy_set_header X-Forwarded-Proto $scheme; \
-    } \
-    location / { \
-        root /usr/share/nginx/html; \
-        index index.html; \
-        try_files $uri $uri/ /index.html; \
-    } \
-}' > /etc/nginx/conf.d/default.conf && \
+COPY default.conf.template /etc/nginx/templates/default.conf.template
+RUN rm -f /etc/nginx/conf.d/default.conf && \
     chown -R nginx:nginx /usr/share/nginx/html
+
+# NGINX_ENTRYPOINT_LOCAL_RESOLVERS gates 15-local-resolvers.envsh, which is what
+# populates NGINX_LOCAL_RESOLVERS from /etc/resolv.conf. Without it the resolver
+# directive keeps its literal ${NGINX_LOCAL_RESOLVERS} text and nginx will not start.
+ENV NGINX_ENTRYPOINT_LOCAL_RESOLVERS=1
+# Mandatory. envsubst would otherwise blank out nginx's OWN runtime variables
+# ($host, $remote_addr, $scheme, ...) because they look like shell variables.
+ENV NGINX_ENVSUBST_FILTER="NGINX_LOCAL_RESOLVERS|TASKS_BACKEND_HOST"
+ENV TASKS_BACKEND_HOST="cloistr-tasks-backend.cloistr.svc.cluster.local"
+
 USER nginx
 
 EXPOSE 8080
