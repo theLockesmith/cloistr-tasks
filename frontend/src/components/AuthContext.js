@@ -1,6 +1,7 @@
 // src/components/AuthContext.js - Nostr Authentication Context
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { useNostrAuth } from '@cloistr/auth';
+import { withSignerRetry } from '@cloistr/ui';
 import {
   hasNostrExtension,
   waitForNostrExtension,
@@ -36,7 +37,18 @@ export const AuthProvider = ({ children }) => {
   const [extensionAvailable, setExtensionAvailable] = useState(false);
   const [authError, setAuthError] = useState(null);
 
+  // signerError is set when a NIP-46 signing attempt fails during an
+  // SSO restore. It is DISTINCT from authError (which is for login-flow
+  // failures) and from session state (which is never cleared on signing
+  // failures). While signerError is set, App.js renders SignerRecovery
+  // instead of LoginScreen so the user knows their session is intact.
+  const [signerError, setSignerError] = useState(null);
+
   const refreshTimerRef = useRef(null);
+  // Stable ref to the current signer so retrySignerAuth (exposed on context)
+  // can read it without requiring a dependency that would re-create the callback
+  // on every auth state change.
+  const activeSignerRef = useRef(activeSigner);
 
   const API_BASE = import.meta.env.VITE_API_URL || '/api';
 
@@ -279,7 +291,11 @@ export const AuthProvider = ({ children }) => {
       const { challenge, nonce } = await challengeResponse.json();
 
       const unsignedEvent = createAuthEvent(pubkey, challenge, nonce);
-      const signedEvent = await signer.signEvent(unsignedEvent);
+      // withSignerRetry retries ONLY for retryable failures (relay unreachable,
+      // socket closed). A denial from the signer (CANCELLED, REMOTE_ERROR) is
+      // rethrown immediately — retrying a refusal would re-prompt the user for
+      // something they already declined, which is worse than failing once.
+      const signedEvent = await withSignerRetry(() => signer.signEvent(unsignedEvent));
 
       const verifyResponse = await fetch(`${API_BASE}/auth/verify`, {
         method: 'POST',
@@ -426,6 +442,58 @@ export const AuthProvider = ({ children }) => {
   // (stored in localStorage as 'user_pubkey'). This prevents re-auth on the
   // initial mount render when activePubkey and user_pubkey are already in sync,
   // and prevents double-fires if the effect runs twice with the same key.
+  // Keep activeSignerRef in sync with the latest signer from useNostrAuth.
+  useEffect(() => {
+    activeSignerRef.current = activeSigner;
+  }, [activeSigner]);
+
+  /**
+   * Attempt to exchange the current Nostr signer for a tasks backend JWT.
+   *
+   * Called when SharedAuthProvider restores an SSO session (the Nostr identity
+   * is known but tasks has no JWT for it yet), and again when the user clicks
+   * "Try again" on the SignerRecovery screen.
+   *
+   * On persistent failure it sets signerError (showing SignerRecovery) instead
+   * of falling through to LoginScreen. The Nostr session is NEVER touched.
+   */
+  const attemptSignerAuth = useCallback(async () => {
+    const signer = activeSignerRef.current;
+    if (!signer) return;
+
+    // Clear any previous recovery screen before trying.
+    setSignerError(null);
+
+    const delays = [0, 1500, 4000];
+    let lastError;
+    for (const wait of delays) {
+      if (wait) await new Promise((r) => setTimeout(r, wait));
+      try {
+        await loginWithSigner(signer);
+        // Success: JWT obtained. signerError is already null.
+        return;
+      } catch (err) {
+        lastError = err;
+        // A rejected identity (denial, malformed request) will not change on
+        // retry. Only server errors (transient=true) and network-level
+        // TypeErrors are worth repeating.
+        if (!err?.transient && err?.name !== 'TypeError') break;
+      }
+    }
+
+    console.error('Auth from restored shared session failed:', lastError);
+    // Surface the recovery screen rather than falling through to LoginScreen.
+    // The Nostr session is still valid; this is a signing/backend failure.
+    setSignerError(lastError);
+    // Reset so the next key observation re-triggers auth (key switch or reload).
+    activePubkeyRef.current = null;
+  }, [loginWithSigner]); // activeSignerRef is stable; loginWithSigner is memoized
+
+  /** Clear the recovery screen. Goes back to LoginScreen (Nostr session intact). */
+  const clearSignerError = useCallback(() => {
+    setSignerError(null);
+  }, []);
+
   const activePubkeyRef = useRef(null);
   useEffect(() => {
     const newPubkey = authState.activePubkey;
@@ -472,26 +540,7 @@ export const AuthProvider = ({ children }) => {
       // Without a retry a single blip drops the user onto a sign-in screen
       // despite a perfectly valid session — the exact symptom this change set
       // exists to remove.
-      const attemptAuth = async () => {
-        const delays = [0, 1500, 4000];
-        let lastError;
-        for (const wait of delays) {
-          if (wait) await new Promise((r) => setTimeout(r, wait));
-          try {
-            await loginWithSigner(activeSigner);
-            return;
-          } catch (err) {
-            lastError = err;
-            // A rejected identity will not become valid on a retry; only
-            // server and network failures are worth repeating.
-            if (!err?.transient && err?.name !== 'TypeError') break;
-          }
-        }
-        console.error('Initial auth from restored shared session failed:', lastError);
-        activePubkeyRef.current = null; // let the next key change retry
-      };
-
-      attemptAuth();
+      attemptSignerAuth();
       return;
     }
 
@@ -525,6 +574,10 @@ export const AuthProvider = ({ children }) => {
     loading,
     extensionAvailable,
     authError,
+    // Signer-resilience state (Parts 1-4)
+    signerError,
+    clearSignerError,
+    retrySignerAuth: attemptSignerAuth,
     loginWithExtension,
     loginWithBunker,
     loginWithSigner,
