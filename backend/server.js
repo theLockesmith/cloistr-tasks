@@ -8,6 +8,7 @@ import dotenv from 'dotenv';
 import promClient from 'prom-client';
 
 import { initializeDatabase, createPool, createAppPool } from './database/init.js';
+import { emptyToNull, toIntOrNull } from './utils.js';
 import { authenticateToken, optionalAuth, requireOwnership, issueJWT } from './middleware/auth.js';
 
 // Import nostr-tools for signature verification
@@ -464,16 +465,37 @@ app.get('/api/lists/:listId/tasks', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: 'Access denied' });
     }
     
+    // Fetch tasks with labels (aggregated as JSON array) and sub-task counts.
+    // Labels and sub-task count are optional features; the query still works
+    // on schemas that have not run migration 007/008 yet because COALESCE and
+    // LEFT JOIN handle the NULL case gracefully.
     const result = await pool.query(`
-      SELECT t.*, tt.name as template_name, tt.description as template_description,
-             tt.time_slot, tt.estimated_minutes, tt.priority, tt.due_date
+      SELECT t.*,
+             tt.name          AS template_name,
+             tt.description   AS template_description,
+             tt.time_slot,
+             tt.estimated_minutes,
+             tt.priority,
+             tt.due_date,
+             tt.parent_template_id,
+             tt.reminder_offset_minutes,
+             COALESCE(
+               (SELECT json_agg(json_build_object('id', l.id, 'name', l.name, 'color', l.color))
+                FROM task_template_labels ttl
+                JOIN labels l ON l.id = ttl.label_id
+                WHERE ttl.template_id = tt.id),
+               '[]'::json
+             ) AS labels,
+             (SELECT COUNT(*) FROM task_templates sub
+              WHERE sub.parent_template_id = tt.id AND sub.active = true) AS subtask_count
       FROM tasks t
       JOIN task_templates tt ON t.template_id = tt.id
       JOIN task_lists tl ON t.list_id = tl.id
       WHERE t.list_id = $1 AND DATE(t.reset_date) = $2 AND tl.user_id = $3
+        AND tt.parent_template_id IS NULL
       ORDER BY tt.sort_order, tt.name
     `, [listId, today, req.user.id]);
-    
+
     res.json(result.rows);
   } catch (error) {
     console.error('Error fetching tasks:', error);
@@ -511,36 +533,49 @@ app.post('/api/tasks/:taskId/toggle', authenticateToken, async (req, res) => {
   }
 });
 
+// emptyToNull and toIntOrNull imported from ./utils.js
+
 // Create new task list (user-specific)
 app.post('/api/lists', authenticateToken, async (req, res) => {
   try {
     await syncUser(req.user);
-    
-    const { name, description, icon, color } = req.body;
-    
+
+    const {
+      name, description, icon, color,
+      list_type, reset_enabled, reset_time, reset_days, custom_reset_days,
+    } = req.body;
+
     // First, get the next sort order for this user
     const sortResult = await pool.query(`
       SELECT COALESCE(MAX(sort_order), 0) + 1 as next_sort_order
-      FROM task_lists 
+      FROM task_lists
       WHERE user_id = $1
     `, [req.user.id]);
-    
+
     const nextSortOrder = sortResult.rows[0].next_sort_order;
-    
-    // Then insert the new list
+
+    // Then insert the new list, persisting all recurrence configuration.
     const result = await pool.query(`
-      INSERT INTO task_lists (name, description, icon, color, user_id, sort_order)
-      VALUES ($1, $2, $3, $4, $5, $6)
+      INSERT INTO task_lists (
+        name, description, icon, color, user_id, sort_order,
+        list_type, reset_enabled, reset_time, reset_days, custom_reset_days
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
       RETURNING *
     `, [
-      name, 
-      description, 
-      icon || '📋', 
-      color || '#3b82f6', 
-      req.user.id, 
-      nextSortOrder
+      name,
+      description,
+      icon || '📋',
+      color || '#3b82f6',
+      req.user.id,
+      nextSortOrder,
+      list_type || 'recurring',
+      reset_enabled !== false,
+      emptyToNull(reset_time) || '06:00',
+      reset_days || 'daily',
+      Array.isArray(custom_reset_days) ? custom_reset_days : [],
     ]);
-    
+
     res.status(201).json(result.rows[0]);
   } catch (error) {
     console.error('Error creating list:', error);
@@ -548,28 +583,14 @@ app.post('/api/lists', authenticateToken, async (req, res) => {
   }
 });
 
-// Add task template to list (with ownership check)
-// An HTML form sends "" for a field the user left blank, and Postgres cannot
-// cast "" to integer or date — it raises, and the handler's catch turns that
-// into a bare 500. Leaving the optional "Minutes" field empty therefore made
-// task creation fail outright, which is the common case rather than an edge
-// case. Normalise "" to NULL for every optional column.
-const emptyToNull = (v) => (v === undefined || v === null || v === '' ? null : v);
-
-const toIntOrNull = (v) => {
-  const base = emptyToNull(v);
-  if (base === null) return null;
-  const n = Number(base);
-  return Number.isFinite(n) ? Math.trunc(n) : null;
-};
-
-// Update a task list. The UI has had an Edit List dialog and drag-to-reorder
-// for a while; both call PUT /api/lists/:id, which did not exist — every rename
-// and every reorder returned 404 and surfaced as "Failed to update list".
+// Update a task list - name, appearance and recurrence settings.
 app.put('/api/lists/:listId', authenticateToken, async (req, res) => {
   try {
     const { listId } = req.params;
-    const { name, description, icon, color, sortOrder } = req.body;
+    const {
+      name, description, icon, color, sortOrder,
+      list_type, reset_enabled, reset_time, reset_days, custom_reset_days,
+    } = req.body;
 
     const ownership = await pool.query('SELECT user_id FROM task_lists WHERE id = $1', [listId]);
     if (ownership.rows.length === 0) {
@@ -579,16 +600,20 @@ app.put('/api/lists/:listId', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    // COALESCE so a partial update (reorder sends only sortOrder) does not wipe
-    // the fields it did not mention.
+    // COALESCE keeps existing values for fields the caller did not supply.
     const result = await pool.query(`
       UPDATE task_lists
-      SET name        = COALESCE($1, name),
-          description = COALESCE($2, description),
-          icon        = COALESCE($3, icon),
-          color       = COALESCE($4, color),
-          sort_order  = COALESCE($5, sort_order)
-      WHERE id = $6 AND user_id = $7
+      SET name               = COALESCE($1, name),
+          description        = COALESCE($2, description),
+          icon               = COALESCE($3, icon),
+          color              = COALESCE($4, color),
+          sort_order         = COALESCE($5, sort_order),
+          list_type          = COALESCE($6, list_type),
+          reset_enabled      = COALESCE($7, reset_enabled),
+          reset_time         = COALESCE($8, reset_time),
+          reset_days         = COALESCE($9, reset_days),
+          custom_reset_days  = COALESCE($10, custom_reset_days)
+      WHERE id = $11 AND user_id = $12
       RETURNING *
     `, [
       name === undefined || name === '' ? null : String(name).trim(),
@@ -596,6 +621,11 @@ app.put('/api/lists/:listId', authenticateToken, async (req, res) => {
       emptyToNull(icon),
       emptyToNull(color),
       toIntOrNull(sortOrder),
+      emptyToNull(list_type),
+      reset_enabled === undefined ? null : Boolean(reset_enabled),
+      emptyToNull(reset_time),
+      emptyToNull(reset_days),
+      Array.isArray(custom_reset_days) ? custom_reset_days : (custom_reset_days === undefined ? null : []),
       listId,
       req.user.id,
     ]);
@@ -607,9 +637,7 @@ app.put('/api/lists/:listId', authenticateToken, async (req, res) => {
   }
 });
 
-// Delete a task list. The Edit List dialog has offered a Delete List button
-// with a confirmation prompt; DELETE /api/lists/:id did not exist, so the list
-// always survived and the user got "Failed to delete list".
+// Delete a task list along with all its templates and task instances.
 app.delete('/api/lists/:listId', authenticateToken, async (req, res) => {
   try {
     const { listId } = req.params;
@@ -622,9 +650,8 @@ app.delete('/api/lists/:listId', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    // Delete children explicitly rather than relying on a cascade that may not
-    // be declared on every deployment's schema. Wrapped in a transaction so a
-    // failure part-way cannot leave orphaned tasks pointing at a dead list.
+    // Delete in dependency order inside a transaction so a failure cannot
+    // leave orphaned rows.
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
@@ -649,25 +676,54 @@ app.delete('/api/lists/:listId', authenticateToken, async (req, res) => {
 app.post('/api/lists/:listId/templates', authenticateToken, async (req, res) => {
   try {
     const { listId } = req.params;
-    const { name, description, timeSlot, estimatedMinutes, priority, dueDate } = req.body;
+    const {
+      name, description, timeSlot, estimatedMinutes, priority, dueDate,
+      parentTemplateId, reminderOffsetMinutes, labelIds,
+    } = req.body;
 
+    // Validate before touching the database. Cheaper, and an invalid request
+    // should not cost a query.
     if (!name || !String(name).trim()) {
       return res.status(400).json({ error: 'Task name is required' });
     }
 
-    // Check ownership inline
-    const ownershipCheck = await pool.query('SELECT user_id FROM task_lists WHERE id = $1', [listId]);
+    // Ownership and list_type in ONE query: the template insert below needs
+    // list_type, and a second round-trip for it was pure latency.
+    const ownershipCheck = await pool.query(
+      'SELECT user_id, list_type FROM task_lists WHERE id = $1',
+      [listId]
+    );
     if (ownershipCheck.rows.length === 0) {
       return res.status(404).json({ error: 'List not found' });
     }
     if (ownershipCheck.rows[0].user_id !== req.user.id) {
       return res.status(403).json({ error: 'Access denied' });
     }
+    const listType = ownershipCheck.rows[0].list_type || 'recurring';
+
+    // Validate parent template (if provided): it must belong to the same list
+    // and must itself be a top-level template (no two-level nesting).
+    if (parentTemplateId) {
+      const parentCheck = await pool.query(
+        'SELECT id, parent_template_id FROM task_templates WHERE id = $1 AND list_id = $2',
+        [parentTemplateId, listId]
+      );
+      if (parentCheck.rows.length === 0) {
+        return res.status(400).json({ error: 'Parent task not found in this list' });
+      }
+      if (parentCheck.rows[0].parent_template_id !== null) {
+        return res.status(400).json({ error: 'Cannot nest a sub-task under another sub-task' });
+      }
+    }
 
     // Create the template
     const templateResult = await pool.query(`
-      INSERT INTO task_templates (list_id, name, description, time_slot, estimated_minutes, priority, due_date, sort_order)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, (
+      INSERT INTO task_templates (
+        list_id, name, description, time_slot, estimated_minutes,
+        priority, due_date, parent_template_id, reminder_offset_minutes,
+        sort_order
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, (
         SELECT COALESCE(MAX(sort_order), 0) + 1
         FROM task_templates
         WHERE list_id = $1
@@ -681,20 +737,45 @@ app.post('/api/lists/:listId/templates', authenticateToken, async (req, res) => 
       toIntOrNull(estimatedMinutes),
       priority || 'medium',
       emptyToNull(dueDate),
+      toIntOrNull(parentTemplateId),
+      toIntOrNull(reminderOffsetMinutes),
     ]);
-    
+
     const newTemplate = templateResult.rows[0];
-    
-    // Automatically create today's task instance from this template
-    const taskResult = await pool.query(`
-      INSERT INTO tasks (template_id, list_id, reset_date, created_at)
-      VALUES ($1, $2, CURRENT_DATE, NOW())
-      ON CONFLICT (template_id, reset_date) DO NOTHING
-      RETURNING *
-    `, [newTemplate.id, listId]);
-    
-    console.log(`Created template ${newTemplate.id} and task instance for today`);
-    
+
+    // For completion lists: only create today's task instance if the template
+    // has not already been completed on any previous day.
+    // For recurring lists: always create the instance (ON CONFLICT DO NOTHING
+    // handles duplicate-day safety).
+    const shouldCreate = listType !== 'completion' || !(await pool.query(
+      `SELECT 1 FROM tasks WHERE template_id = $1 AND completed_at IS NOT NULL AND DATE(reset_date) < CURRENT_DATE LIMIT 1`,
+      [newTemplate.id]
+    )).rows.length;
+
+    if (shouldCreate) {
+      await pool.query(`
+        INSERT INTO tasks (template_id, list_id, reset_date, created_at)
+        VALUES ($1, $2, CURRENT_DATE, NOW())
+        ON CONFLICT (template_id, reset_date) DO NOTHING
+      `, [newTemplate.id, listId]);
+    }
+
+    // Attach labels if provided (ignore unknown label IDs silently).
+    if (Array.isArray(labelIds) && labelIds.length > 0) {
+      const validLabelIds = labelIds.map(toIntOrNull).filter(Boolean);
+      if (validLabelIds.length > 0) {
+        const labelPlaceholders = validLabelIds.map((_, i) => `($1, $${i + 2})`).join(', ');
+        await pool.query(
+          `INSERT INTO task_template_labels (template_id, label_id)
+           VALUES ${labelPlaceholders}
+           ON CONFLICT DO NOTHING`,
+          [newTemplate.id, ...validLabelIds]
+        );
+      }
+    }
+
+    console.log(`Created template ${newTemplate.id}, task instance created=${shouldCreate}`);
+
     res.status(201).json(newTemplate);
   } catch (error) {
     console.error('Error creating task template:', error);
@@ -706,7 +787,10 @@ app.post('/api/lists/:listId/templates', authenticateToken, async (req, res) => 
 app.put('/api/templates/:templateId', authenticateToken, async (req, res) => {
   try {
     const { templateId } = req.params;
-    const { name, description, timeSlot, estimatedMinutes, priority, dueDate, sort_order } = req.body;
+    const {
+      name, description, timeSlot, estimatedMinutes, priority, dueDate,
+      sort_order, reminderOffsetMinutes, labelIds,
+    } = req.body;
 
     // Build dynamic update query based on provided fields
     const updates = [];
@@ -720,6 +804,10 @@ app.put('/api/templates/:templateId', authenticateToken, async (req, res) => {
     if (priority !== undefined) { updates.push(`priority = $${paramIndex++}`); values.push(priority); }
     if (dueDate !== undefined) { updates.push(`due_date = $${paramIndex++}`); values.push(dueDate || null); }
     if (sort_order !== undefined) { updates.push(`sort_order = $${paramIndex++}`); values.push(sort_order); }
+    if (reminderOffsetMinutes !== undefined) {
+      updates.push(`reminder_offset_minutes = $${paramIndex++}`);
+      values.push(toIntOrNull(reminderOffsetMinutes));
+    }
 
     updates.push('updated_at = NOW()');
     values.push(templateId, req.user.id);
@@ -733,11 +821,26 @@ app.put('/api/templates/:templateId', authenticateToken, async (req, res) => {
       AND tl.user_id = $${paramIndex}
       RETURNING task_templates.*
     `, values);
-    
+
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Template not found or access denied' });
     }
-    
+
+    // Sync labels if provided: replace the full set atomically.
+    if (Array.isArray(labelIds)) {
+      await pool.query('DELETE FROM task_template_labels WHERE template_id = $1', [templateId]);
+      const validLabelIds = labelIds.map(toIntOrNull).filter(Boolean);
+      if (validLabelIds.length > 0) {
+        const labelPlaceholders = validLabelIds.map((_, i) => `($1, $${i + 2})`).join(', ');
+        await pool.query(
+          `INSERT INTO task_template_labels (template_id, label_id)
+           VALUES ${labelPlaceholders}
+           ON CONFLICT DO NOTHING`,
+          [templateId, ...validLabelIds]
+        );
+      }
+    }
+
     res.json(result.rows[0]);
   } catch (error) {
     console.error('Error updating template:', error);
@@ -864,6 +967,128 @@ app.get('/api/user/reset-history', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Error fetching reset history:', error);
     res.status(500).json({ error: 'Failed to fetch reset history' });
+  }
+});
+
+// ── Labels (tags) ─────────────────────────────────────────────────────────────
+
+// List all labels for the current user.
+app.get('/api/labels', authenticateToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT * FROM labels WHERE user_id = $1 ORDER BY name',
+      [req.user.id]
+    );
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching labels:', error);
+    res.status(500).json({ error: 'Failed to fetch labels' });
+  }
+});
+
+// Create a label.
+app.post('/api/labels', authenticateToken, async (req, res) => {
+  try {
+    const { name, color } = req.body;
+    if (!name || !String(name).trim()) {
+      return res.status(400).json({ error: 'Label name is required' });
+    }
+    const result = await pool.query(
+      `INSERT INTO labels (user_id, name, color) VALUES ($1, $2, $3)
+       ON CONFLICT (user_id, name) DO UPDATE SET color = EXCLUDED.color
+       RETURNING *`,
+      [req.user.id, String(name).trim(), color || '#6366f1']
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    console.error('Error creating label:', error);
+    res.status(500).json({ error: 'Failed to create label' });
+  }
+});
+
+// Update a label (name and/or color).
+app.put('/api/labels/:labelId', authenticateToken, async (req, res) => {
+  try {
+    const { labelId } = req.params;
+    const { name, color } = req.body;
+    const result = await pool.query(
+      `UPDATE labels
+       SET name  = COALESCE($1, name),
+           color = COALESCE($2, color)
+       WHERE id = $3 AND user_id = $4
+       RETURNING *`,
+      [
+        name ? String(name).trim() : null,
+        color || null,
+        labelId,
+        req.user.id,
+      ]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Label not found' });
+    }
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error updating label:', error);
+    res.status(500).json({ error: 'Failed to update label' });
+  }
+});
+
+// Delete a label (cascades junction rows via FK).
+app.delete('/api/labels/:labelId', authenticateToken, async (req, res) => {
+  try {
+    const { labelId } = req.params;
+    const result = await pool.query(
+      'DELETE FROM labels WHERE id = $1 AND user_id = $2 RETURNING id',
+      [labelId, req.user.id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Label not found' });
+    }
+    res.status(204).send();
+  } catch (error) {
+    console.error('Error deleting label:', error);
+    res.status(500).json({ error: 'Failed to delete label' });
+  }
+});
+
+// Get sub-tasks for a given template (top-level task ID).
+app.get('/api/templates/:templateId/subtasks', authenticateToken, async (req, res) => {
+  try {
+    const { templateId } = req.params;
+    const today = new Date().toISOString().split('T')[0];
+
+    // Ownership via the list
+    const ownerCheck = await pool.query(
+      `SELECT tl.user_id FROM task_templates tt
+       JOIN task_lists tl ON tl.id = tt.list_id
+       WHERE tt.id = $1`,
+      [templateId]
+    );
+    if (ownerCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'Task not found' });
+    }
+    if (ownerCheck.rows[0].user_id !== req.user.id) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    // Return sub-task templates alongside today's task instance if it exists.
+    const result = await pool.query(`
+      SELECT tt.*,
+             t.id         AS task_id,
+             t.completed_at,
+             t.reset_date
+      FROM task_templates tt
+      LEFT JOIN tasks t ON t.template_id = tt.id AND DATE(t.reset_date) = $2
+      WHERE tt.parent_template_id = $1
+        AND tt.active = true
+      ORDER BY tt.sort_order, tt.name
+    `, [templateId, today]);
+
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching subtasks:', error);
+    res.status(500).json({ error: 'Failed to fetch subtasks' });
   }
 });
 
