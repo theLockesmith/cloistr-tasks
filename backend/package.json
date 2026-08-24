@@ -28,7 +28,7 @@
     "helmet": "^7.2.0",
     "jsonwebtoken": "^9.0.3",
     "morgan": "^1.11.0",
-    "nostr-tools": "^2.24.3",
+    "nostr-tools": "^2.25.0",
     "pg": "^8.23.0",
     "prom-client": "^15.1.3"
   },
