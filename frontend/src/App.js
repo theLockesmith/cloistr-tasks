@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { ToastProvider, SharedAuthProvider, useSharedSession, SignerRecovery } from '@cloistr/ui/components';
+import { ToastProvider, SharedAuthProvider, useSharedSession, SignerRecovery, AuthRestoreGate } from '@cloistr/ui/components';
 import '@cloistr/ui/styles';
 import { AuthProvider, useAuth } from './components/AuthContext';
 import { useRelayReconnect } from './lib/useRelayReconnect';
+import { resolveAuthView } from './lib/authGate';
 import LoginScreen from './components/LoginScreen';
 import AuthenticatedApp from './components/AuthenticatedApp';
 import './App.css';
@@ -23,7 +24,7 @@ function RelayReconnectMount() {
 }
 
 function AppContent() {
-  const { isAuthenticated, loading, signerError, clearSignerError, retrySignerAuth } = useAuth();
+  const { isAuthenticated, loading, signerError, signerAuthPending, clearSignerError, retrySignerAuth } = useAuth();
   // Hold rendering while the SHARED session is still resolving.
   //
   // Without this, a 100ms timer was the only thing gating the decision, so an
@@ -34,7 +35,7 @@ function AppContent() {
   //
   // isResolving comes from SharedAuthProvider and is bounded by its own 12s
   // backstop, so this cannot hang the app if the restore never completes.
-  const { isResolving } = useSharedSession();
+  const { isResolving, hasSharedSession } = useSharedSession();
   const [initializing, setInitializing] = useState(true);
   const [retrying, setRetrying] = useState(false);
 
@@ -46,7 +47,30 @@ function AppContent() {
     return () => clearTimeout(timer);
   }, []);
 
-  if (loading || initializing || isResolving) {
+  // All branching lives in resolveAuthView (src/lib/authGate.js) so it can be
+  // unit-tested — this app has no jsdom env, so inline JSX branching is
+  // untestable, and this is where a production auth defect lived. See that file
+  // for the full production timeline.
+  const view = resolveAuthView({
+    isAuthenticated: isAuthenticated(),
+    loading,
+    initializing,
+    isResolving,
+    signerError,
+    signerAuthPending,
+    hasSharedSession,
+    retrying,
+  });
+
+  // "Signing you in securely" — the SAME component the rest of the suite uses.
+  // Previously tasks showed a bare "Loading..." here, and showed nothing at all
+  // during the JWT exchange, which is the defect AuthRestoreGate was extracted
+  // to fix for mail on 2026-08-17.
+  if (view === 'restore-gate') {
+    return <AuthRestoreGate />;
+  }
+
+  if (view === 'loading') {
     return (
       <div className="app">
         <div className="loading">
@@ -65,7 +89,7 @@ function AppContent() {
   // "Go back" leads to LoginScreen, NOT a credential prompt. The Nostr
   // key remains connected in SharedAuthProvider; the user can attempt to
   // log in again from the login options without re-entering any credentials.
-  if (signerError) {
+  if (view === 'signer-recovery') {
     const handleRetry = async () => {
       setRetrying(true);
       try {
@@ -89,7 +113,7 @@ function AppContent() {
     );
   }
 
-  return isAuthenticated() ? <AuthenticatedApp /> : <LoginScreen />;
+  return view === 'app' ? <AuthenticatedApp /> : <LoginScreen />;
 }
 
 function App() {
