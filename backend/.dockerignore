@@ -1,0 +1,23 @@
+# The backend Dockerfile ends in `COPY . .`, so anything in the build context
+# ends up in the published image. On 2026-09-02 that included the tracked
+# environment file: `ls -A /app` in cloistr-tasks-backend-867bf55785-6tfzw
+# listed it, meaning every image in the registry carries it.
+#
+# It is inert at runtime — dotenv.config() does not override variables that are
+# already set, and the deployment gets its environment from the
+# cloistr-tasks Secret via envFrom — but inert is not the same as absent.
+# Anyone who can pull the image can read it.
+.env
+.env.*
+!.env.example
+
+# npm ci runs before this copy, so a node_modules from the build context would
+# overwrite the one just installed for this platform.
+node_modules
+
+# Nothing in the image needs history or build metadata.
+.git
+.gitignore
+Dockerfile
+.dockerignore
+npm-debug.log*
