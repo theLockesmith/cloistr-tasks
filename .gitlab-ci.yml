@@ -1,5 +1,6 @@
 stages:
   - update
+  - test
   - build
   - smoke
 
@@ -13,6 +14,9 @@ include:
   - project: 'coldforge/ci-templates'
     ref: main
     file: '/templates/frontend-smoke.yml'
+  - project: 'coldforge/ci-templates'
+    ref: main
+    file: '/templates/cloistr-rules.yml'
 
 # Auto-update @cloistr/ui when triggered from upstream
 update-dependency:
@@ -37,6 +41,30 @@ update-dependency:
         git commit -m "chore: Update ${UPSTREAM_PACKAGE} [auto]"
         git push "https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git" HEAD:${CI_COMMIT_REF_NAME}
       fi
+
+# Run the frontend unit tests. Until now this repo had no test stage at all, so
+# `npm test` (52 vitest tests, three files) had never executed in CI once. The
+# gate that mattered most was the one that did not exist: the 12 tests in
+# src/tests/authGate.test.js were written specifically to discriminate the auth
+# regression fixed in 87dd901c (5 of them fail against the previous logic) and
+# they went in behind a green pipeline that never ran them.
+#
+# `extends: .cloistr-rules` is REQUIRED, not decorative. Without it this job is
+# silently dropped from every merge-request pipeline. See cloistr-rules.yml.
+#
+# Image and install flags mirror frontend/Dockerfile exactly (node:22.23.2-alpine,
+# `npm ci --legacy-peer-deps`). That pairing is verified against this lockfile:
+# CI's npm is 10.9.8 and npm 10 rejects lockfiles that omit optional peer deps,
+# which is the deadlock that held docs/sheets/whiteboard on a stale bundle for a
+# week. Do not "simplify" this to node:22 + plain `npm ci`.
+test:frontend:
+  extends: .cloistr-rules
+  stage: test
+  image: node:22.23.2-alpine
+  script:
+    - cd frontend
+    - npm ci --legacy-peer-deps
+    - npm test
 
 build:backend:
   extends: .kaniko-build
