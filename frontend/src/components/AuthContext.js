@@ -44,6 +44,19 @@ export const AuthProvider = ({ children }) => {
   // instead of LoginScreen so the user knows their session is intact.
   const [signerError, setSignerError] = useState(null);
 
+  // True for the ENTIRE attemptSignerAuth run, including the waits between
+  // retries. loginWithSigner clears `loading` in its own finally on every failed
+  // attempt, so without this flag the gaps between retries look identical to
+  // "settled, not signed in" and AppContent renders LoginScreen underneath an
+  // auth attempt that is still in flight.
+  //
+  // Observed in production 2026-08-28 01:12:43-01:12:57 (tasks-backend access
+  // log): challenge at :43 failed because the nostrconnect signer session was
+  // not connected until :44.98, the 1500ms retry re-issued a challenge at :45,
+  // and the exchange only completed at :57. The user was shown the sign-in
+  // screen mid-flight and reloaded the page at :42 in response.
+  const [signerAuthPending, setSignerAuthPending] = useState(false);
+
   const refreshTimerRef = useRef(null);
   // Stable ref to the current signer so retrySignerAuth (exposed on context)
   // can read it without requiring a dependency that would re-create the callback
@@ -463,30 +476,39 @@ export const AuthProvider = ({ children }) => {
 
     // Clear any previous recovery screen before trying.
     setSignerError(null);
+    // Held across the whole loop — including the waits below — so the UI can
+    // keep showing the restore gate instead of flashing the sign-in screen.
+    setSignerAuthPending(true);
 
-    const delays = [0, 1500, 4000];
-    let lastError;
-    for (const wait of delays) {
-      if (wait) await new Promise((r) => setTimeout(r, wait));
-      try {
-        await loginWithSigner(signer);
-        // Success: JWT obtained. signerError is already null.
-        return;
-      } catch (err) {
-        lastError = err;
-        // A rejected identity (denial, malformed request) will not change on
-        // retry. Only server errors (transient=true) and network-level
-        // TypeErrors are worth repeating.
-        if (!err?.transient && err?.name !== 'TypeError') break;
+    try {
+      const delays = [0, 1500, 4000];
+      let lastError;
+      for (const wait of delays) {
+        if (wait) await new Promise((r) => setTimeout(r, wait));
+        try {
+          await loginWithSigner(signer);
+          // Success: JWT obtained. signerError is already null.
+          return;
+        } catch (err) {
+          lastError = err;
+          // A rejected identity (denial, malformed request) will not change on
+          // retry. Only server errors (transient=true) and network-level
+          // TypeErrors are worth repeating.
+          if (!err?.transient && err?.name !== 'TypeError') break;
+        }
       }
-    }
 
-    console.error('Auth from restored shared session failed:', lastError);
-    // Surface the recovery screen rather than falling through to LoginScreen.
-    // The Nostr session is still valid; this is a signing/backend failure.
-    setSignerError(lastError);
-    // Reset so the next key observation re-triggers auth (key switch or reload).
-    activePubkeyRef.current = null;
+      console.error('Auth from restored shared session failed:', lastError);
+      // Surface the recovery screen rather than falling through to LoginScreen.
+      // The Nostr session is still valid; this is a signing/backend failure.
+      setSignerError(lastError);
+      // Reset so the next key observation re-triggers auth (key switch or reload).
+      activePubkeyRef.current = null;
+    } finally {
+      // Always clears: the loop above always ends in success (early return) or
+      // setSignerError, so the gate this drives is bounded and cannot hang.
+      setSignerAuthPending(false);
+    }
   }, [loginWithSigner]); // activeSignerRef is stable; loginWithSigner is memoized
 
   /** Clear the recovery screen. Goes back to LoginScreen (Nostr session intact). */
@@ -576,6 +598,7 @@ export const AuthProvider = ({ children }) => {
     authError,
     // Signer-resilience state (Parts 1-4)
     signerError,
+    signerAuthPending,
     clearSignerError,
     retrySignerAuth: attemptSignerAuth,
     loginWithExtension,
