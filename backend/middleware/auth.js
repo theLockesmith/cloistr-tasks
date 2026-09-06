@@ -4,8 +4,30 @@ import jwt from 'jsonwebtoken';
 
 dotenv.config();
 
-// JWT secret - in production, use a secure secret from environment
-const JWT_SECRET = process.env.JWT_SECRET || 'cloistr-tasks-jwt-secret-change-in-production';
+// Known-compromised secrets that were committed to the repository.
+// The server must refuse to start on any of these.
+const COMMITTED_SECRETS = [
+  'cloistr-tasks-jwt-secret-change-in-production',
+  'cloistr-dev-secret-change-in-production',
+];
+
+if (!process.env.JWT_SECRET) {
+  console.error(
+    'FATAL: JWT_SECRET is not set. The server will not start without it.\n' +
+    'Set JWT_SECRET in the environment or in a .env file that is NOT committed to git.'
+  );
+  process.exit(1);
+}
+
+if (COMMITTED_SECRETS.includes(process.env.JWT_SECRET)) {
+  console.error(
+    'FATAL: JWT_SECRET is set to a known placeholder that was committed to the repository.\n' +
+    'Generate a real secret (e.g. `openssl rand -base64 32`) and set it in an untracked .env file.'
+  );
+  process.exit(1);
+}
+
+const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '24h';
 
 // Verify JWT token and extract user info

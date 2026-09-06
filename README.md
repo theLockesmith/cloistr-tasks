@@ -41,11 +41,11 @@ A personal task management application with Nostr authentication for daily routi
 
 ### Environment Variables
 
-Backend `.env`:
+Backend `.env` (must NOT be committed to git):
 ```bash
 PORT=3000
 DATABASE_URL=postgresql://user:password@localhost/ritual_forge
-JWT_SECRET=your-secure-secret-change-in-production
+JWT_SECRET=$(openssl rand -base64 32)   # required — server refuses to start without a real secret
 JWT_EXPIRES_IN=24h
 ```
 
