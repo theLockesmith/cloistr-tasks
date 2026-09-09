@@ -2,20 +2,16 @@ import React, { useState, useRef, useCallback } from 'react';
 
 // DragDropList – reorderable list that works on both mouse and touch.
 //
-// The previous implementation used HTML5 drag events (onDragStart, onDrop,
-// etc.) which never fire on touch devices, so mobile users had no way to
-// reorder items.  This version uses the Pointer Events API instead; pointer
-// events fire for mouse, touch, and stylus uniformly.
+// Uses the Pointer Events API so mouse, touch, and stylus all work.
 //
-// The algorithm:
-//   pointerdown – record which item the user grabbed and lock pointer capture
-//     so we keep receiving events even if the pointer leaves the element.
-//   pointermove – compute which slot the pointer is over and update
-//     dragOverIndex so we can show the drop indicator.
-//   pointerup / pointercancel – commit or discard the reorder.
-//
-// We use CSS `touch-action: none` on each draggable item to prevent the
-// browser from interpreting the touch as a scroll before we claim it.
+// IMPORTANT: setPointerCapture is deferred until the pointer has moved
+// beyond DRAG_THRESHOLD_PX.  Capturing the pointer on pointerdown
+// redirects the browser's click target to the capturing element, which
+// swallows onClick handlers on child elements (the list cards' onClick
+// never fires).  Deferring capture lets simple clicks propagate
+// normally while still capturing once a real drag begins.
+
+const DRAG_THRESHOLD_PX = 5;
 
 function DragDropList({ items, onReorder, renderItem, itemKey = 'id', className = '', isGrid = false }) {
   const [draggedIndex, setDraggedIndex] = useState(null);
@@ -23,11 +19,13 @@ function DragDropList({ items, onReorder, renderItem, itemKey = 'id', className 
 
   // Map from item key → DOM element so we can do hit-testing in pointermove.
   const itemRefs = useRef({});
-  // The item container element that we attach the move listener to.
+  // The item container element.
   const containerRef = useRef(null);
+  // Pending drag: recorded on pointerdown, promoted to a real drag once
+  // the pointer moves beyond the threshold.
+  const pendingDrag = useRef(null);
 
   // Find which list slot the pointer is over by checking bounding boxes.
-  // Returns the index of the slot, or null if outside the list.
   const indexFromPoint = useCallback((clientX, clientY) => {
     let best = null;
     let bestDist = Infinity;
@@ -48,19 +46,44 @@ function DragDropList({ items, onReorder, renderItem, itemKey = 'id', className 
     // Checkboxes and buttons inside the item handle their own events.
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'BUTTON') return;
 
-    e.currentTarget.setPointerCapture(e.pointerId);
-    setDraggedIndex(index);
-    setDragOverIndex(index);
+    // Record the intent but do NOT capture yet.  Capturing on pointerdown
+    // eats the click event that child onClick handlers depend on.
+    pendingDrag.current = {
+      index,
+      startX: e.clientX,
+      startY: e.clientY,
+      pointerId: e.pointerId,
+      target: e.currentTarget,
+    };
   }, []);
 
   const handlePointerMove = useCallback((e, _index) => {
-    if (draggedIndex === null || !e.isPrimary) return;
+    if (!e.isPrimary) return;
+
+    // If we have a pending (not yet started) drag, check the threshold.
+    if (pendingDrag.current && draggedIndex === null) {
+      const dx = e.clientX - pendingDrag.current.startX;
+      const dy = e.clientY - pendingDrag.current.startY;
+      if (Math.abs(dx) + Math.abs(dy) >= DRAG_THRESHOLD_PX) {
+        // Promote to a real drag: capture the pointer now.
+        pendingDrag.current.target.setPointerCapture(pendingDrag.current.pointerId);
+        setDraggedIndex(pendingDrag.current.index);
+        setDragOverIndex(pendingDrag.current.index);
+      }
+      return;
+    }
+
+    if (draggedIndex === null) return;
     const over = indexFromPoint(e.clientX, e.clientY);
     if (over !== null) setDragOverIndex(over);
   }, [draggedIndex, indexFromPoint]);
 
   const handlePointerUp = useCallback((e, _index) => {
     if (!e.isPrimary) return;
+
+    // Clear the pending drag regardless.
+    pendingDrag.current = null;
+
     if (draggedIndex !== null && dragOverIndex !== null && draggedIndex !== dragOverIndex) {
       const newItems = [...items];
       const [removed] = newItems.splice(draggedIndex, 1);
@@ -72,6 +95,7 @@ function DragDropList({ items, onReorder, renderItem, itemKey = 'id', className 
   }, [draggedIndex, dragOverIndex, items, onReorder]);
 
   const handlePointerCancel = useCallback(() => {
+    pendingDrag.current = null;
     setDraggedIndex(null);
     setDragOverIndex(null);
   }, []);

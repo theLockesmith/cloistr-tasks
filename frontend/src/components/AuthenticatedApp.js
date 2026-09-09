@@ -7,6 +7,7 @@ import AddListModal from './AddListModal';
 import AddTaskModal from './AddTaskModal';
 import DragDropList from './DragDropList';
 import LabelManager from './LabelManager';
+import { isSharedList, shareLabel, canWriteList } from '../lib/accessHelpers';
 
 function AuthenticatedApp() {
   const { user, logout, apiCall, formatPubkey } = useAuth();
@@ -295,6 +296,17 @@ function AuthenticatedApp() {
                       <div>
                         <h3>{list.name}</h3>
                         <p className="list-description">{list.description}</p>
+                        {isSharedList(list) && (
+                          <span style={{
+                            fontSize: '0.7rem',
+                            padding: '0.1rem 0.4rem',
+                            borderRadius: '4px',
+                            backgroundColor: 'var(--border)',
+                            color: 'var(--text-secondary)',
+                          }}>
+                            {shareLabel(list)}
+                          </span>
+                        )}
                       </div>
                     </div>
                     
@@ -352,13 +364,16 @@ function AuthenticatedApp() {
                                     ? 'var(--primary)'
                                     : 'var(--border)',
                                   color: task.completed_at ? 'white' : 'var(--text-secondary)',
-                                  cursor: 'pointer'
+                                  cursor: !canWriteList(list) ? 'default' : 'pointer',
+                                  opacity: !canWriteList(list) ? 0.5 : 1
                                 }}
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  toggleTaskFromPreview(task.id, list.id);
+                                  if (canWriteList(list)) {
+                                    toggleTaskFromPreview(task.id, list.id);
+                                  }
                                 }}
-                                title="Click to toggle completion"
+                                title={!canWriteList(list) ? 'Read-only access' : 'Click to toggle completion'}
                               >
                                 {task.completed_at ? '✓' : ''}
                               </div>
