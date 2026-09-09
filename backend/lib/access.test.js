@@ -90,6 +90,13 @@ describe('templateAccess', () => {
     expect(result.access).toBe('write');
   });
 
+  test('returns read access for shared user through a template (ADMISSION)', async () => {
+    const pool = mockPool([{ list_id: 1, user_id: OWNER_PK, access: 'read' }]);
+    const result = await templateAccess(pool, 10, READER_PK);
+    expect(result.listId).toBe(1);
+    expect(result.access).toBe('read');
+  });
+
   test('returns null for nonexistent template', async () => {
     const pool = mockPool([]);
     const result = await templateAccess(pool, 999, NOBODY_PK);
@@ -112,6 +119,12 @@ describe('taskAccess', () => {
     const pool = mockPool([{ list_id: 1, access: 'write' }]);
     const result = await taskAccess(pool, 100, WRITER_PK);
     expect(result.access).toBe('write');
+  });
+
+  test('returns read access for shared user through a task (ADMISSION)', async () => {
+    const pool = mockPool([{ list_id: 1, access: 'read' }]);
+    const result = await taskAccess(pool, 100, READER_PK);
+    expect(result.access).toBe('read');
   });
 
   test('returns null for nonexistent task', async () => {

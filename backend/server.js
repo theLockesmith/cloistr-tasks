@@ -9,7 +9,7 @@ import promClient from 'prom-client';
 
 import { initializeDatabase, createPool, createAppPool } from './database/init.js';
 import { emptyToNull, toIntOrNull } from './utils.js';
-import { authenticateToken, optionalAuth, requireOwnership, issueJWT } from './middleware/auth.js';
+import { authenticateToken, optionalAuth, issueJWT } from './middleware/auth.js';
 import { listAccess, hasAccess, templateAccess, taskAccess } from './lib/access.js';
 
 // Import nostr-tools for signature verification
@@ -631,6 +631,9 @@ app.put('/api/lists/:listId', authenticateToken, async (req, res) => {
       req.user.id,
     ]);
 
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'List not found' });
+    }
     res.json(result.rows[0]);
   } catch (error) {
     console.error('Error updating task list:', error);
@@ -932,13 +935,17 @@ app.post('/api/admin/reset-daily', authenticateToken, async (req, res) => {
   }
 });
 
-// Get user analytics
+// Get user analytics (owned lists only — shared lists are excluded).
 app.get('/api/user/analytics', authenticateToken, async (req, res) => {
   try {
     const { days = 30 } = req.query;
-    
+    const daysInt = parseInt(days, 10);
+    if (!Number.isFinite(daysInt) || daysInt < 1) {
+      return res.status(400).json({ error: 'days must be a positive integer' });
+    }
+
     const result = await pool.query(`
-      SELECT 
+      SELECT
         DATE(t.reset_date) as date,
         tl.name as list_name,
         tl.icon,
@@ -947,11 +954,11 @@ app.get('/api/user/analytics', authenticateToken, async (req, res) => {
         ROUND(COUNT(t.completed_at) * 100.0 / COUNT(t.id), 1) as completion_percentage
       FROM tasks t
       JOIN task_lists tl ON t.list_id = tl.id
-      WHERE tl.user_id = $1 
-      AND t.reset_date >= CURRENT_DATE - INTERVAL '${parseInt(days)} days'
+      WHERE tl.user_id = $1
+      AND t.reset_date >= CURRENT_DATE - ($2 * INTERVAL '1 day')
       GROUP BY DATE(t.reset_date), tl.id, tl.name, tl.icon
       ORDER BY date DESC, tl.sort_order
-    `, [req.user.id]);
+    `, [req.user.id, daysInt]);
     
     res.json(result.rows);
   } catch (error) {
@@ -1126,7 +1133,7 @@ app.post('/api/lists/:listId/shares', authenticateToken, async (req, res) => {
     const { listId } = req.params;
     const { pubkey, permission } = req.body;
 
-    if (!pubkey || typeof pubkey !== 'string' || pubkey.length !== 64) {
+    if (!/^[0-9a-f]{64}$/.test(pubkey)) {
       return res.status(400).json({ error: 'A valid 64-character hex pubkey is required' });
     }
     if (permission && !['read', 'write'].includes(permission)) {
@@ -1162,6 +1169,10 @@ app.post('/api/lists/:listId/shares', authenticateToken, async (req, res) => {
 app.delete('/api/lists/:listId/shares/:pubkey', authenticateToken, async (req, res) => {
   try {
     const { listId, pubkey } = req.params;
+
+    if (!/^[0-9a-f]{64}$/.test(pubkey)) {
+      return res.status(400).json({ error: 'A valid 64-character hex pubkey is required' });
+    }
 
     const access = await listAccess(pool, listId, req.user.id);
     if (!access) {
