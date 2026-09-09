@@ -9,7 +9,8 @@ import promClient from 'prom-client';
 
 import { initializeDatabase, createPool, createAppPool } from './database/init.js';
 import { emptyToNull, toIntOrNull } from './utils.js';
-import { authenticateToken, optionalAuth, requireOwnership, issueJWT } from './middleware/auth.js';
+import { authenticateToken, optionalAuth, issueJWT } from './middleware/auth.js';
+import { listAccess, hasAccess, templateAccess, taskAccess } from './lib/access.js';
 
 // Import nostr-tools for signature verification
 import { verifyEvent, getPublicKey } from 'nostr-tools/pure';
@@ -427,22 +428,26 @@ app.put('/api/user/settings', authenticateToken, async (req, res) => {
   }
 });
 
-// Get all task lists (user-specific)
+// Get all task lists (owned + shared with this user)
 app.get('/api/lists', authenticateToken, async (req, res) => {
   try {
     await syncUser(req.user);
-    
+
     const result = await pool.query(`
-      SELECT l.*, 
+      SELECT l.*,
              COUNT(t.id) as total_tasks,
-             COUNT(CASE WHEN t.completed_at IS NOT NULL THEN 1 END) as completed_tasks
+             COUNT(CASE WHEN t.completed_at IS NOT NULL THEN 1 END) as completed_tasks,
+             CASE WHEN l.user_id = $1 THEN 'owner'
+                  ELSE tls.permission
+             END AS access
       FROM task_lists l
+      LEFT JOIN task_list_shares tls ON tls.list_id = l.id AND tls.pubkey = $1
       LEFT JOIN tasks t ON l.id = t.list_id AND DATE(t.reset_date) = CURRENT_DATE
-      WHERE l.user_id = $1 AND l.active = true
-      GROUP BY l.id
+      WHERE (l.user_id = $1 OR tls.pubkey IS NOT NULL) AND l.active = true
+      GROUP BY l.id, tls.permission
       ORDER BY l.sort_order, l.name
     `, [req.user.id]);
-    
+
     res.json(result.rows);
   } catch (error) {
     console.error('Error fetching lists:', error);
@@ -450,25 +455,17 @@ app.get('/api/lists', authenticateToken, async (req, res) => {
   }
 });
 
-// Get tasks for a specific list (with ownership check)
+// Get tasks for a specific list (any access level)
 app.get('/api/lists/:listId/tasks', authenticateToken, async (req, res) => {
   try {
     const { listId } = req.params;
     const today = new Date().toISOString().split('T')[0];
-    
-    // Check ownership inline
-    const ownershipCheck = await pool.query('SELECT user_id FROM task_lists WHERE id = $1', [listId]);
-    if (ownershipCheck.rows.length === 0) {
+
+    const access = await listAccess(pool, listId, req.user.id);
+    if (!access) {
       return res.status(404).json({ error: 'List not found' });
     }
-    if (ownershipCheck.rows[0].user_id !== req.user.id) {
-      return res.status(403).json({ error: 'Access denied' });
-    }
-    
-    // Fetch tasks with labels (aggregated as JSON array) and sub-task counts.
-    // Labels and sub-task count are optional features; the query still works
-    // on schemas that have not run migration 007/008 yet because COALESCE and
-    // LEFT JOIN handle the NULL case gracefully.
+
     const result = await pool.query(`
       SELECT t.*,
              tt.name          AS template_name,
@@ -490,11 +487,10 @@ app.get('/api/lists/:listId/tasks', authenticateToken, async (req, res) => {
               WHERE sub.parent_template_id = tt.id AND sub.active = true) AS subtask_count
       FROM tasks t
       JOIN task_templates tt ON t.template_id = tt.id
-      JOIN task_lists tl ON t.list_id = tl.id
-      WHERE t.list_id = $1 AND DATE(t.reset_date) = $2 AND tl.user_id = $3
+      WHERE t.list_id = $1 AND DATE(t.reset_date) = $2
         AND tt.parent_template_id IS NULL
       ORDER BY tt.sort_order, tt.name
-    `, [listId, today, req.user.id]);
+    `, [listId, today]);
 
     res.json(result.rows);
   } catch (error) {
@@ -503,29 +499,34 @@ app.get('/api/lists/:listId/tasks', authenticateToken, async (req, res) => {
   }
 });
 
-// Toggle task completion (with ownership check)
+// Toggle task completion (requires write access)
 app.post('/api/tasks/:taskId/toggle', authenticateToken, async (req, res) => {
   try {
     const { taskId } = req.params;
-    
+
+    const { access } = await taskAccess(pool, taskId, req.user.id);
+    if (!access) {
+      return res.status(404).json({ error: 'Task not found' });
+    }
+    if (!hasAccess(access, 'write')) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
     const result = await pool.query(`
-      UPDATE tasks 
-      SET completed_at = CASE 
-        WHEN completed_at IS NULL THEN NOW() 
-        ELSE NULL 
+      UPDATE tasks
+      SET completed_at = CASE
+        WHEN completed_at IS NULL THEN NOW()
+        ELSE NULL
       END,
       updated_at = NOW()
-      FROM task_lists tl
-      WHERE tasks.list_id = tl.id 
-      AND tasks.id = $1 
-      AND tl.user_id = $2
-      RETURNING tasks.*
-    `, [taskId, req.user.id]);
-    
+      WHERE id = $1
+      RETURNING *
+    `, [taskId]);
+
     if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Task not found or access denied' });
+      return res.status(404).json({ error: 'Task not found' });
     }
-    
+
     res.json(result.rows[0]);
   } catch (error) {
     console.error('Error toggling task:', error);
@@ -583,7 +584,7 @@ app.post('/api/lists', authenticateToken, async (req, res) => {
   }
 });
 
-// Update a task list - name, appearance and recurrence settings.
+// Update a task list - name, appearance and recurrence settings (owner only).
 app.put('/api/lists/:listId', authenticateToken, async (req, res) => {
   try {
     const { listId } = req.params;
@@ -592,11 +593,11 @@ app.put('/api/lists/:listId', authenticateToken, async (req, res) => {
       list_type, reset_enabled, reset_time, reset_days, custom_reset_days,
     } = req.body;
 
-    const ownership = await pool.query('SELECT user_id FROM task_lists WHERE id = $1', [listId]);
-    if (ownership.rows.length === 0) {
+    const access = await listAccess(pool, listId, req.user.id);
+    if (!access) {
       return res.status(404).json({ error: 'List not found' });
     }
-    if (ownership.rows[0].user_id !== req.user.id) {
+    if (!hasAccess(access, 'owner')) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
@@ -630,6 +631,9 @@ app.put('/api/lists/:listId', authenticateToken, async (req, res) => {
       req.user.id,
     ]);
 
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'List not found' });
+    }
     res.json(result.rows[0]);
   } catch (error) {
     console.error('Error updating task list:', error);
@@ -637,27 +641,27 @@ app.put('/api/lists/:listId', authenticateToken, async (req, res) => {
   }
 });
 
-// Delete a task list along with all its templates and task instances.
+// Delete a task list along with all its templates and task instances (owner only).
 app.delete('/api/lists/:listId', authenticateToken, async (req, res) => {
   try {
     const { listId } = req.params;
 
-    const ownership = await pool.query('SELECT user_id FROM task_lists WHERE id = $1', [listId]);
-    if (ownership.rows.length === 0) {
+    const access = await listAccess(pool, listId, req.user.id);
+    if (!access) {
       return res.status(404).json({ error: 'List not found' });
     }
-    if (ownership.rows[0].user_id !== req.user.id) {
+    if (!hasAccess(access, 'owner')) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
     // Delete in dependency order inside a transaction so a failure cannot
-    // leave orphaned rows.
+    // leave orphaned rows.  Shares are CASCADE-deleted by the FK.
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
       await client.query('DELETE FROM tasks WHERE list_id = $1', [listId]);
       await client.query('DELETE FROM task_templates WHERE list_id = $1', [listId]);
-      await client.query('DELETE FROM task_lists WHERE id = $1 AND user_id = $2', [listId, req.user.id]);
+      await client.query('DELETE FROM task_lists WHERE id = $1', [listId]);
       await client.query('COMMIT');
     } catch (err) {
       await client.query('ROLLBACK');
@@ -687,19 +691,20 @@ app.post('/api/lists/:listId/templates', authenticateToken, async (req, res) => 
       return res.status(400).json({ error: 'Task name is required' });
     }
 
-    // Ownership and list_type in ONE query: the template insert below needs
-    // list_type, and a second round-trip for it was pure latency.
-    const ownershipCheck = await pool.query(
-      'SELECT user_id, list_type FROM task_lists WHERE id = $1',
-      [listId]
-    );
-    if (ownershipCheck.rows.length === 0) {
+    // Access check: creating templates requires write access.
+    const access = await listAccess(pool, listId, req.user.id);
+    if (!access) {
       return res.status(404).json({ error: 'List not found' });
     }
-    if (ownershipCheck.rows[0].user_id !== req.user.id) {
+    if (!hasAccess(access, 'write')) {
       return res.status(403).json({ error: 'Access denied' });
     }
-    const listType = ownershipCheck.rows[0].list_type || 'recurring';
+    // list_type is needed below for completion-list logic.
+    const listTypeResult = await pool.query(
+      'SELECT list_type FROM task_lists WHERE id = $1',
+      [listId]
+    );
+    const listType = listTypeResult.rows[0]?.list_type || 'recurring';
 
     // Validate parent template (if provided): it must belong to the same list
     // and must itself be a top-level template (no two-level nesting).
@@ -783,7 +788,7 @@ app.post('/api/lists/:listId/templates', authenticateToken, async (req, res) => 
   }
 });
 
-// Update task template (with ownership check)
+// Update task template (requires write access)
 app.put('/api/templates/:templateId', authenticateToken, async (req, res) => {
   try {
     const { templateId } = req.params;
@@ -791,6 +796,14 @@ app.put('/api/templates/:templateId', authenticateToken, async (req, res) => {
       name, description, timeSlot, estimatedMinutes, priority, dueDate,
       sort_order, reminderOffsetMinutes, labelIds,
     } = req.body;
+
+    const { access } = await templateAccess(pool, templateId, req.user.id);
+    if (!access) {
+      return res.status(404).json({ error: 'Template not found' });
+    }
+    if (!hasAccess(access, 'write')) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
 
     // Build dynamic update query based on provided fields
     const updates = [];
@@ -810,20 +823,17 @@ app.put('/api/templates/:templateId', authenticateToken, async (req, res) => {
     }
 
     updates.push('updated_at = NOW()');
-    values.push(templateId, req.user.id);
+    values.push(templateId);
 
     const result = await pool.query(`
       UPDATE task_templates
       SET ${updates.join(', ')}
-      FROM task_lists tl
-      WHERE task_templates.list_id = tl.id
-      AND task_templates.id = $${paramIndex++}
-      AND tl.user_id = $${paramIndex}
-      RETURNING task_templates.*
+      WHERE id = $${paramIndex++}
+      RETURNING *
     `, values);
 
     if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Template not found or access denied' });
+      return res.status(404).json({ error: 'Template not found' });
     }
 
     // Sync labels if provided: replace the full set atomically.
@@ -848,22 +858,26 @@ app.put('/api/templates/:templateId', authenticateToken, async (req, res) => {
   }
 });
 
-// Delete task template (with ownership check)
+// Delete task template (requires write access)
 app.delete('/api/templates/:templateId', authenticateToken, async (req, res) => {
   try {
     const { templateId } = req.params;
-    
-    const result = await pool.query(`
-      DELETE FROM task_templates 
-      USING task_lists tl
-      WHERE task_templates.list_id = tl.id
-      AND task_templates.id = $1
-      AND tl.user_id = $2
-      RETURNING task_templates.id
-    `, [templateId, req.user.id]);
-    
+
+    const { access } = await templateAccess(pool, templateId, req.user.id);
+    if (!access) {
+      return res.status(404).json({ error: 'Template not found' });
+    }
+    if (!hasAccess(access, 'write')) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    const result = await pool.query(
+      'DELETE FROM task_templates WHERE id = $1 RETURNING id',
+      [templateId]
+    );
+
     if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Template not found or access denied' });
+      return res.status(404).json({ error: 'Template not found' });
     }
     
     res.json({ message: 'Template deleted successfully' });
@@ -921,13 +935,17 @@ app.post('/api/admin/reset-daily', authenticateToken, async (req, res) => {
   }
 });
 
-// Get user analytics
+// Get user analytics (owned lists only — shared lists are excluded).
 app.get('/api/user/analytics', authenticateToken, async (req, res) => {
   try {
     const { days = 30 } = req.query;
-    
+    const daysInt = parseInt(days, 10);
+    if (!Number.isFinite(daysInt) || daysInt < 1) {
+      return res.status(400).json({ error: 'days must be a positive integer' });
+    }
+
     const result = await pool.query(`
-      SELECT 
+      SELECT
         DATE(t.reset_date) as date,
         tl.name as list_name,
         tl.icon,
@@ -936,11 +954,11 @@ app.get('/api/user/analytics', authenticateToken, async (req, res) => {
         ROUND(COUNT(t.completed_at) * 100.0 / COUNT(t.id), 1) as completion_percentage
       FROM tasks t
       JOIN task_lists tl ON t.list_id = tl.id
-      WHERE tl.user_id = $1 
-      AND t.reset_date >= CURRENT_DATE - INTERVAL '${parseInt(days)} days'
+      WHERE tl.user_id = $1
+      AND t.reset_date >= CURRENT_DATE - ($2 * INTERVAL '1 day')
       GROUP BY DATE(t.reset_date), tl.id, tl.name, tl.icon
       ORDER BY date DESC, tl.sort_order
-    `, [req.user.id]);
+    `, [req.user.id, daysInt]);
     
     res.json(result.rows);
   } catch (error) {
@@ -1052,24 +1070,15 @@ app.delete('/api/labels/:labelId', authenticateToken, async (req, res) => {
   }
 });
 
-// Get sub-tasks for a given template (top-level task ID).
+// Get sub-tasks for a given template (any access level).
 app.get('/api/templates/:templateId/subtasks', authenticateToken, async (req, res) => {
   try {
     const { templateId } = req.params;
     const today = new Date().toISOString().split('T')[0];
 
-    // Ownership via the list
-    const ownerCheck = await pool.query(
-      `SELECT tl.user_id FROM task_templates tt
-       JOIN task_lists tl ON tl.id = tt.list_id
-       WHERE tt.id = $1`,
-      [templateId]
-    );
-    if (ownerCheck.rows.length === 0) {
+    const { access } = await templateAccess(pool, templateId, req.user.id);
+    if (!access) {
       return res.status(404).json({ error: 'Task not found' });
-    }
-    if (ownerCheck.rows[0].user_id !== req.user.id) {
-      return res.status(403).json({ error: 'Access denied' });
     }
 
     // Return sub-task templates alongside today's task instance if it exists.
@@ -1089,6 +1098,101 @@ app.get('/api/templates/:templateId/subtasks', authenticateToken, async (req, re
   } catch (error) {
     console.error('Error fetching subtasks:', error);
     res.status(500).json({ error: 'Failed to fetch subtasks' });
+  }
+});
+
+
+// ── List sharing ─────────────────────────────────────────────────────────────
+
+// List shares for a list (owner only).
+app.get('/api/lists/:listId/shares', authenticateToken, async (req, res) => {
+  try {
+    const { listId } = req.params;
+    const access = await listAccess(pool, listId, req.user.id);
+    if (!access) {
+      return res.status(404).json({ error: 'List not found' });
+    }
+    if (!hasAccess(access, 'owner')) {
+      return res.status(403).json({ error: 'Only the list owner can view shares' });
+    }
+
+    const result = await pool.query(
+      'SELECT id, pubkey, permission, created_at FROM task_list_shares WHERE list_id = $1 ORDER BY created_at',
+      [listId]
+    );
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching shares:', error);
+    res.status(500).json({ error: 'Failed to fetch shares' });
+  }
+});
+
+// Share a list with a pubkey (owner only).
+app.post('/api/lists/:listId/shares', authenticateToken, async (req, res) => {
+  try {
+    const { listId } = req.params;
+    const { pubkey, permission } = req.body;
+
+    if (!/^[0-9a-f]{64}$/.test(pubkey)) {
+      return res.status(400).json({ error: 'A valid 64-character hex pubkey is required' });
+    }
+    if (permission && !['read', 'write'].includes(permission)) {
+      return res.status(400).json({ error: 'Permission must be "read" or "write"' });
+    }
+    if (pubkey === req.user.id) {
+      return res.status(400).json({ error: 'Cannot share a list with yourself' });
+    }
+
+    const access = await listAccess(pool, listId, req.user.id);
+    if (!access) {
+      return res.status(404).json({ error: 'List not found' });
+    }
+    if (!hasAccess(access, 'owner')) {
+      return res.status(403).json({ error: 'Only the list owner can share it' });
+    }
+
+    const result = await pool.query(`
+      INSERT INTO task_list_shares (list_id, pubkey, permission)
+      VALUES ($1, $2, $3)
+      ON CONFLICT (list_id, pubkey) DO UPDATE SET permission = EXCLUDED.permission
+      RETURNING *
+    `, [listId, pubkey, permission || 'read']);
+
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    console.error('Error sharing list:', error);
+    res.status(500).json({ error: 'Failed to share list' });
+  }
+});
+
+// Remove a share (owner only).
+app.delete('/api/lists/:listId/shares/:pubkey', authenticateToken, async (req, res) => {
+  try {
+    const { listId, pubkey } = req.params;
+
+    if (!/^[0-9a-f]{64}$/.test(pubkey)) {
+      return res.status(400).json({ error: 'A valid 64-character hex pubkey is required' });
+    }
+
+    const access = await listAccess(pool, listId, req.user.id);
+    if (!access) {
+      return res.status(404).json({ error: 'List not found' });
+    }
+    if (!hasAccess(access, 'owner')) {
+      return res.status(403).json({ error: 'Only the list owner can remove shares' });
+    }
+
+    const result = await pool.query(
+      'DELETE FROM task_list_shares WHERE list_id = $1 AND pubkey = $2 RETURNING id',
+      [listId, pubkey]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Share not found' });
+    }
+    res.status(204).send();
+  } catch (error) {
+    console.error('Error removing share:', error);
+    res.status(500).json({ error: 'Failed to remove share' });
   }
 });
 

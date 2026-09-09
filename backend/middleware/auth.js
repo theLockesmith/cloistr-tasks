@@ -4,8 +4,23 @@ import jwt from 'jsonwebtoken';
 
 dotenv.config();
 
-// JWT secret - in production, use a secure secret from environment
-const JWT_SECRET = process.env.JWT_SECRET || 'cloistr-tasks-jwt-secret-change-in-production';
+// JWT secret — required from the environment; no fallback.
+const KNOWN_DEV_SECRETS = [
+  'cloistr-tasks-jwt-secret-change-in-production',
+  'cloistr-dev-secret-change-in-production',
+];
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  console.error('FATAL: JWT_SECRET environment variable is not set. Refusing to start.');
+  process.exit(1);
+}
+if (KNOWN_DEV_SECRETS.includes(JWT_SECRET)) {
+  console.error(
+    'FATAL: JWT_SECRET is set to a known placeholder (%s). Generate a real secret:\n  node -e "console.log(require(\'crypto\').randomBytes(48).toString(\'base64\'))"',
+    JWT_SECRET,
+  );
+  process.exit(1);
+}
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '24h';
 
 // Verify JWT token and extract user info

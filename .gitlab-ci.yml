@@ -66,6 +66,18 @@ test:frontend:
     - npm ci --legacy-peer-deps
     - npm test
 
+# Backend unit tests (access control, helpers).  Same base image as the
+# Dockerfile so the lockfile resolves identically.  The test script passes
+# --experimental-vm-modules because the project is ESM ("type": "module").
+test:backend:
+  extends: .cloistr-rules
+  stage: test
+  image: node:22.23.2-alpine
+  script:
+    - cd backend
+    - npm ci
+    - npm test
+
 build:backend:
   extends: .kaniko-build
   stage: build
