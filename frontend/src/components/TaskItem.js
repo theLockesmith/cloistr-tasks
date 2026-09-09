@@ -5,7 +5,7 @@ import { formatDueDate, normaliseLabels, parseSubtaskCount } from '../lib/taskHe
 // Priority labels and their CSS class suffix (maps to .priority-badge--{level} in App.css)
 const PRIORITY_LABELS = { low: 'Low', medium: 'Medium', high: 'High' };
 
-function TaskItem({ task, onToggle, onEdit }) {
+function TaskItem({ task, onToggle, onEdit, readOnly }) {
   const formatTime = (timeSlot) => {
     if (!timeSlot) return '';
     if (timeSlot.includes(':')) return timeSlot;
@@ -28,10 +28,11 @@ function TaskItem({ task, onToggle, onEdit }) {
         checked={!!task.completed_at}
         onChange={(e) => {
           e.stopPropagation();
-          onToggle(task.id);
+          if (onToggle) onToggle(task.id);
         }}
         className="task-checkbox"
         onClick={(e) => e.stopPropagation()}
+        disabled={readOnly}
       />
 
       <div

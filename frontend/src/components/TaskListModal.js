@@ -148,6 +148,10 @@ function TaskListModal({ list, onClose, apiCall, user, onTasksUpdated }) {
   const completionPercentage = getCompletionPercentage();
   const completedTasks = tasks.filter(task => task.completed_at);
 
+  // Sharing access gates: list.access is 'owner', 'write', or 'read'.
+  const isOwner = list.access === 'owner';
+  const canWrite = isOwner || list.access === 'write';
+
   // Apply text, priority, and label filters.  Filtering is client-side: we
   // always fetch the full list from the server and narrow it here so the user
   // can clear the filter and get everything back without a round-trip.
@@ -191,13 +195,15 @@ function TaskListModal({ list, onClose, apiCall, user, onTasksUpdated }) {
               <h2>{list.name}</h2>
               <p>{list.description}</p>
             </div>
-            <button 
-              className="btn btn-secondary btn-small"
-              onClick={() => setShowEditList(true)}
-              title="Edit List"
-            >
-              ✎
-            </button>
+            {isOwner && (
+              <button
+                className="btn btn-secondary btn-small"
+                onClick={() => setShowEditList(true)}
+                title="Edit List"
+              >
+                ✎
+              </button>
+            )}
           </div>
           
           <div className="list-stats">
@@ -267,13 +273,14 @@ function TaskListModal({ list, onClose, apiCall, user, onTasksUpdated }) {
           ) : (
             <DragDropList
               items={filteredTasks}
-              onReorder={isFiltering ? () => {} : reorderTasks}
+              onReorder={(isFiltering || !canWrite) ? () => {} : reorderTasks}
               itemKey="id"
               renderItem={(task) => (
                 <TaskItem
                   task={task}
-                  onToggle={toggleTask}
-                  onEdit={setSelectedTask}
+                  onToggle={canWrite ? toggleTask : undefined}
+                  onEdit={canWrite ? setSelectedTask : undefined}
+                  readOnly={!canWrite}
                 />
               )}
             />
@@ -281,12 +288,14 @@ function TaskListModal({ list, onClose, apiCall, user, onTasksUpdated }) {
         </div>
 
         <div className="modal-actions">
-          <button 
-            className="btn btn-secondary"
-            onClick={() => setShowAddTask(true)}
-          >
-            + Add Task
-          </button>
+          {canWrite && (
+            <button
+              className="btn btn-secondary"
+              onClick={() => setShowAddTask(true)}
+            >
+              + Add Task
+            </button>
+          )}
           <button onClick={onClose} className="btn btn-primary">Close</button>
         </div>
       </div>

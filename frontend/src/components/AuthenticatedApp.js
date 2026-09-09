@@ -295,6 +295,17 @@ function AuthenticatedApp() {
                       <div>
                         <h3>{list.name}</h3>
                         <p className="list-description">{list.description}</p>
+                        {list.access && list.access !== 'owner' && (
+                          <span style={{
+                            fontSize: '0.7rem',
+                            padding: '0.1rem 0.4rem',
+                            borderRadius: '4px',
+                            backgroundColor: 'var(--border)',
+                            color: 'var(--text-secondary)',
+                          }}>
+                            Shared ({list.access})
+                          </span>
+                        )}
                       </div>
                     </div>
                     
@@ -352,13 +363,16 @@ function AuthenticatedApp() {
                                     ? 'var(--primary)'
                                     : 'var(--border)',
                                   color: task.completed_at ? 'white' : 'var(--text-secondary)',
-                                  cursor: 'pointer'
+                                  cursor: (list.access === 'read') ? 'default' : 'pointer',
+                                  opacity: (list.access === 'read') ? 0.5 : 1
                                 }}
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  toggleTaskFromPreview(task.id, list.id);
+                                  if (list.access !== 'read') {
+                                    toggleTaskFromPreview(task.id, list.id);
+                                  }
                                 }}
-                                title="Click to toggle completion"
+                                title={list.access === 'read' ? 'Read-only access' : 'Click to toggle completion'}
                               >
                                 {task.completed_at ? '✓' : ''}
                               </div>
