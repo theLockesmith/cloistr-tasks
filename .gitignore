@@ -8,5 +8,10 @@ CLAUDE.md
 dist/
 frontend/dist/
 
+# Environment files (may contain secrets)
+.env
+backend/.env
+frontend/.env
+
 # Editor/tool backup files
 *.bak
