@@ -4,6 +4,7 @@ import AddTaskModal from './AddTaskModal';
 import EditTaskModal from './EditTaskModal';
 import EditListModal from './EditListModal';
 import DragDropList from './DragDropList';
+import { isListOwner, canWriteList } from '../lib/accessHelpers';
 
 function TaskListModal({ list, onClose, apiCall, user, onTasksUpdated }) {
   const [tasks, setTasks] = useState([]);
@@ -148,9 +149,9 @@ function TaskListModal({ list, onClose, apiCall, user, onTasksUpdated }) {
   const completionPercentage = getCompletionPercentage();
   const completedTasks = tasks.filter(task => task.completed_at);
 
-  // Sharing access gates: list.access is 'owner', 'write', or 'read'.
-  const isOwner = list.access === 'owner';
-  const canWrite = isOwner || list.access === 'write';
+  // Sharing access gates — see accessHelpers.js for the centralised logic.
+  const isOwner = isListOwner(list);
+  const canWrite = canWriteList(list);
 
   // Apply text, priority, and label filters.  Filtering is client-side: we
   // always fetch the full list from the server and narrow it here so the user
