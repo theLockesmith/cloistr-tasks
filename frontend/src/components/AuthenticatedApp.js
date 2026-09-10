@@ -153,7 +153,7 @@ function AuthenticatedApp() {
       const updatePromises = newListOrder.map((list, index) => 
         apiCall('/lists/' + list.id, {
           method: 'PUT',
-          body: JSON.stringify({ sort_order: index + 1 })
+          body: JSON.stringify({ sortOrder: index + 1 })
         })
       );
       
