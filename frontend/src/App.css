@@ -1378,3 +1378,483 @@ body {
     overflow: hidden;
   }
 }
+
+/* ── Board / Kanban ──────────────────────────────────────────────────────── */
+
+.board-modal {
+  position: relative;
+  background: var(--surface);
+  border-radius: 16px;
+  width: 95vw;
+  max-width: 1400px;
+  max-height: 90dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: var(--shadow-xl);
+}
+
+.board-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.25rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+  gap: 1rem;
+  flex-shrink: 0;
+}
+
+.board-header-left {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.board-header-left h2 {
+  font-size: 1.25rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.board-header-left p {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.board-header-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.board-container {
+  display: flex;
+  gap: 1rem;
+  padding: 1rem 1.5rem;
+  overflow-x: auto;
+  overflow-y: auto;
+  flex: 1;
+  align-items: flex-start;
+}
+
+.board-column {
+  background: var(--background);
+  border-radius: 12px;
+  min-width: 280px;
+  max-width: 320px;
+  flex: 0 0 280px;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(90dvh - 100px);
+}
+
+.board-column-new {
+  opacity: 0.8;
+  border: 2px dashed var(--border);
+  background: transparent;
+  padding: 1rem;
+}
+
+.board-column-new input {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border: 1.5px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.9rem;
+  margin-bottom: 0.5rem;
+}
+
+.board-column-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border-top: 3px solid var(--primary);
+  border-radius: 12px 12px 0 0;
+  flex-shrink: 0;
+}
+
+.board-collapse-toggle {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  padding: 0.2rem;
+  line-height: 1;
+}
+
+.board-column-name {
+  font-weight: 600;
+  font-size: 0.95rem;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.board-column-count {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  background: var(--border);
+  padding: 0.1rem 0.5rem;
+  border-radius: 10px;
+  font-weight: 600;
+}
+
+.board-column-delete {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 1.1rem;
+  color: var(--text-secondary);
+  padding: 0.2rem 0.4rem;
+  border-radius: 4px;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s;
+}
+
+.board-column-header:hover .board-column-delete {
+  opacity: 1;
+}
+
+.board-column-delete:hover {
+  color: var(--error);
+}
+
+.board-column-cards {
+  padding: 0.5rem 0.75rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.board-card {
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75rem;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.board-card:hover {
+  border-color: var(--primary);
+  box-shadow: var(--shadow-sm);
+}
+
+.board-card-title {
+  font-size: 0.9rem;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.board-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.4rem;
+  font-size: 0.8rem;
+}
+
+.board-card-priority {
+  font-weight: 700;
+  font-size: 0.75rem;
+}
+
+.board-card-assignee {
+  font-size: 0.75rem;
+}
+
+.board-add-card-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 0.5rem;
+  font-size: 0.85rem;
+  border-radius: 6px;
+  width: 100%;
+  text-align: left;
+  transition: background 0.15s, color 0.15s;
+}
+
+.board-add-card-btn:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
+.board-add-card-form input {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border: 1.5px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.9rem;
+  margin-bottom: 0.5rem;
+}
+
+.board-add-card-form input:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+.board-add-card-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+/* Board card detail modal */
+
+.board-card-modal {
+  max-width: 640px;
+}
+
+.board-card-modal-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.board-card-title-input {
+  flex: 1;
+  font-size: 1.25rem;
+  font-weight: 600;
+  border: none;
+  border-bottom: 2px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  padding: 0.25rem 0;
+  outline: none;
+}
+
+.board-card-title-input:focus {
+  border-bottom-color: var(--primary);
+}
+
+.board-card-column-badge {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  background: var(--border);
+  padding: 0.2rem 0.6rem;
+  border-radius: 10px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.board-card-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.board-card-field label {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 0.25rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.board-card-field textarea,
+.board-card-field input,
+.board-card-field select {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border: 1.5px solid var(--border);
+  border-radius: 8px;
+  background: var(--background);
+  color: var(--text);
+  font-size: 0.9rem;
+}
+
+.board-card-field textarea:focus,
+.board-card-field input:focus,
+.board-card-field select:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+.board-card-field-row {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.board-card-field-row .board-card-field {
+  flex: 1;
+}
+
+.board-card-desc-ro {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+/* Comments */
+
+.board-comments-section {
+  border-top: 1px solid var(--border);
+  padding-top: 1rem;
+  margin-top: 0.5rem;
+}
+
+.board-comments-section h3 {
+  font-size: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.comment-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.comment-item {
+  padding: 0.6rem 0.75rem;
+  background: var(--background);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+
+.comment-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.3rem;
+}
+
+.comment-author {
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: var(--primary);
+}
+
+.comment-time {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.comment-body {
+  font-size: 0.9rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.comment-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.3rem;
+}
+
+.comment-action-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  padding: 0.1rem 0;
+}
+
+.comment-action-btn:hover {
+  color: var(--primary);
+}
+
+.comment-action-delete:hover {
+  color: var(--error);
+}
+
+.comment-edit-form {
+  margin-top: 0.3rem;
+}
+
+.comment-edit-form textarea {
+  width: 100%;
+  padding: 0.4rem 0.6rem;
+  border: 1.5px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.9rem;
+  resize: vertical;
+  margin-bottom: 0.4rem;
+}
+
+.comment-edit-form textarea:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+.comment-input-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.comment-input-form textarea {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border: 1.5px solid var(--border);
+  border-radius: 8px;
+  background: var(--background);
+  color: var(--text);
+  font-size: 0.9rem;
+  resize: vertical;
+}
+
+.comment-input-form textarea:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+.comment-input-form .btn {
+  align-self: flex-end;
+}
+
+/* Board responsive */
+@media (max-width: 500px) {
+  .board-modal {
+    width: 100%;
+    border-radius: 12px 12px 0 0;
+    max-height: 95dvh;
+  }
+
+  .board-header {
+    padding: 1rem;
+    flex-wrap: wrap;
+  }
+
+  .board-container {
+    padding: 0.75rem;
+    gap: 0.75rem;
+  }
+
+  .board-column {
+    min-width: 260px;
+    flex: 0 0 260px;
+  }
+
+  .board-card-field-row {
+    flex-direction: column;
+  }
+
+  .board-card-modal {
+    max-width: 100%;
+    width: 96%;
+  }
+}

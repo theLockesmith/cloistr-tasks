@@ -1,0 +1,268 @@
+/**
+ * BoardView structural tests.
+ *
+ * BoardView is the Kanban board modal: it loads columns/cards from the API,
+ * renders the horizontal column layout, and gates column CUD to owner-only
+ * while card creation is write-accessible.
+ *
+ * Source-level structural tests matching the project's established pattern.
+ */
+
+import fs from 'fs';
+import path from 'path';
+
+const componentPath = path.resolve(
+  __dirname, '../components/BoardView.js',
+);
+const src = fs.readFileSync(componentPath, 'utf8');
+
+// ── Imports and structure ───────────────────────────────────────────────
+
+describe('BoardView imports and exports', () => {
+  test('imports BoardCardModal for card detail view', () => {
+    expect(src).toMatch(/import\s+BoardCardModal\s+from\s+['"]\.\/BoardCardModal['"]/);
+  });
+
+  test('imports access helpers from accessHelpers', () => {
+    expect(src).toMatch(/from\s+['"]\.\.\/lib\/accessHelpers['"]/);
+  });
+
+  test('exports as default', () => {
+    expect(src).toMatch(/export\s+default\s+BoardView/);
+  });
+
+  test('accepts list, onClose, apiCall, user props', () => {
+    expect(src).toMatch(/function\s+BoardView\(\s*\{[^}]*list[^}]*onClose[^}]*apiCall[^}]*user/);
+  });
+});
+
+// ── API loading ─────────────────────────────────────────────────────────
+
+describe('board data loading', () => {
+  test('calls /boards/:listId to load board data', () => {
+    expect(src).toMatch(/apiCall\(\s*['"]\/boards\/['"]\s*\+\s*list\.id\)/);
+  });
+
+  test('sets columns and access from response', () => {
+    expect(src).toContain('setColumns(data.columns)');
+    expect(src).toContain('setAccess(data.access)');
+  });
+
+  test('shows loading spinner while fetching', () => {
+    expect(src).toMatch(/loading[\s\S]*?spinner/);
+    expect(src).toContain('Loading board');
+  });
+
+  test('shows error state on failure', () => {
+    expect(src).toContain("setError('Failed to load board')");
+  });
+});
+
+// ── Access control ──────────────────────────────────────────────────────
+
+describe('access control', () => {
+  test('derives canWrite from access level', () => {
+    expect(src).toMatch(/canWrite\s*=\s*access\s*===\s*['"]owner['"]\s*\|\|\s*access\s*===\s*['"]write['"]/);
+  });
+
+  test('derives isOwner from access level', () => {
+    expect(src).toMatch(/isOwner\s*=\s*access\s*===\s*['"]owner['"]/);
+  });
+
+  test('column creation is owner-only (not write)', () => {
+    // The "+ Column" button is gated by isOwner
+    const addColSection = src.slice(
+      src.indexOf('+ Column'),
+      src.indexOf('+ Column') + 200,
+    );
+    // Walk backwards to find the isOwner gate
+    const beforeAddCol = src.slice(
+      Math.max(0, src.indexOf('+ Column') - 300),
+      src.indexOf('+ Column'),
+    );
+    expect(beforeAddCol).toContain('isOwner');
+  });
+
+  test('column deletion is owner-only', () => {
+    // Delete button gated by isOwner
+    const deleteColRegion = src.slice(
+      src.indexOf('board-column-delete'),
+      src.indexOf('board-column-delete') + 300,
+    );
+    const beforeDeleteCol = src.slice(
+      Math.max(0, src.indexOf('board-column-delete') - 200),
+      src.indexOf('board-column-delete'),
+    );
+    expect(beforeDeleteCol).toContain('isOwner');
+  });
+
+  test('card creation is gated by canWrite', () => {
+    expect(src).toMatch(/canWrite\s*&&\s*addingCardColumnId/);
+    expect(src).toMatch(/canWrite\s*&&\s*[\s\S]*?board-add-card-btn/);
+  });
+});
+
+// ── Column rendering ────────────────────────────────────────────────────
+
+describe('column rendering', () => {
+  test('maps over columns array', () => {
+    expect(src).toMatch(/columns\.map\(\s*column\s*=>/);
+  });
+
+  test('shows column name and card count', () => {
+    expect(src).toContain('board-column-name');
+    expect(src).toContain('board-column-count');
+  });
+
+  test('supports column collapse toggle', () => {
+    expect(src).toContain('board-collapse-toggle');
+    expect(src).toContain('handleToggleCollapse');
+    expect(src).toMatch(/column\.collapsed/);
+  });
+
+  test('hides cards when column is collapsed', () => {
+    expect(src).toMatch(/!column\.collapsed\s*&&/);
+  });
+});
+
+// ── Card rendering ──────────────────────────────────────────────────────
+
+describe('card rendering', () => {
+  test('maps over column.cards array', () => {
+    expect(src).toMatch(/\(column\.cards\s*\|\|\s*\[\]\)\.map\(\s*card\s*=>/);
+  });
+
+  test('card click opens detail modal via setSelectedCard', () => {
+    expect(src).toMatch(/onClick=\{.*setSelectedCard/);
+  });
+
+  test('shows card title', () => {
+    expect(src).toContain('board-card-title');
+    expect(src).toContain('card.title');
+  });
+
+  test('shows priority badge for high-priority cards', () => {
+    expect(src).toContain('board-card-priority');
+    expect(src).toMatch(/card\.priority\s*&&\s*card\.priority\s*<=\s*5/);
+  });
+
+  test('shows due date with color formatting', () => {
+    expect(src).toContain('formatDate');
+    expect(src).toContain('card.due_date');
+  });
+
+  test('shows assignee indicator', () => {
+    expect(src).toContain('board-card-assignee');
+    expect(src).toContain('card.assignee_pubkey');
+  });
+});
+
+// ── Card detail modal ───────────────────────────────────────────────────
+
+describe('card detail modal', () => {
+  test('renders BoardCardModal when selectedCard is set', () => {
+    expect(src).toMatch(/selectedCard\s*&&[\s\S]*?<BoardCardModal/);
+  });
+
+  test('passes card, columns, listId, access, apiCall, user to BoardCardModal', () => {
+    const modalSection = src.slice(
+      src.indexOf('<BoardCardModal'),
+      src.indexOf('<BoardCardModal') + 400,
+    );
+    expect(modalSection).toMatch(/card=\{selectedCard\}/);
+    expect(modalSection).toMatch(/columns=\{columns\}/);
+    expect(modalSection).toMatch(/listId=\{list\.id\}/);
+    expect(modalSection).toMatch(/access=\{access\}/);
+    expect(modalSection).toMatch(/apiCall=\{apiCall\}/);
+    expect(modalSection).toMatch(/user=\{user\}/);
+  });
+
+  test('onCardUpdated reloads board and closes modal', () => {
+    const modalSection = src.slice(
+      src.indexOf('<BoardCardModal'),
+      src.indexOf('<BoardCardModal') + 400,
+    );
+    expect(modalSection).toContain('setSelectedCard(null)');
+    expect(modalSection).toContain('loadBoard()');
+  });
+});
+
+// ── Escape key handling ─────────────────────────────────────────────────
+
+describe('escape key handling', () => {
+  test('registers keydown listener for Escape', () => {
+    expect(src).toMatch(/addEventListener\(\s*['"]keydown['"]/);
+    expect(src).toMatch(/removeEventListener\(\s*['"]keydown['"]/);
+  });
+
+  test('escape priority: card modal > add card > add column > close board', () => {
+    // Find the escape handler block
+    const escIdx = src.indexOf("'Escape'");
+    const escBlock = src.slice(escIdx, escIdx + 500);
+    const selectedCardIdx = escBlock.indexOf('selectedCard');
+    const addingCardIdx = escBlock.indexOf('addingCardColumnId');
+    const addingColumnIdx = escBlock.indexOf('addingColumn');
+    const onCloseIdx = escBlock.indexOf('onClose');
+
+    expect(selectedCardIdx).toBeGreaterThan(-1);
+    expect(selectedCardIdx).toBeLessThan(addingCardIdx);
+    expect(addingCardIdx).toBeLessThan(addingColumnIdx);
+    expect(addingColumnIdx).toBeLessThan(onCloseIdx);
+  });
+});
+
+// ── Add card form ───────────────────────────────────────────────────────
+
+describe('add card form', () => {
+  test('has add card form with board-add-card-form class', () => {
+    expect(src).toContain('board-add-card-form');
+  });
+
+  test('submits via handleAddCard with columnId', () => {
+    expect(src).toContain('handleAddCard(column.id)');
+  });
+
+  test('posts to /boards/:listId/cards', () => {
+    expect(src).toMatch(/apiCall\(\s*['"]\/boards\/['"]\s*\+\s*list\.id\s*\+\s*['"]\/cards['"]/);
+  });
+
+  test('cancel button clears form state', () => {
+    expect(src).toMatch(/setAddingCardColumnId\(null\)/);
+    expect(src).toMatch(/setNewCardTitle\(['"]{2}\)/);
+  });
+});
+
+// ── Add column form ─────────────────────────────────────────────────────
+
+describe('add column form', () => {
+  test('new column form has board-column-new class', () => {
+    expect(src).toContain('board-column-new');
+  });
+
+  test('posts to /boards/:listId/columns', () => {
+    expect(src).toMatch(/apiCall\(\s*['"]\/boards\/['"]\s*\+\s*list\.id\s*\+\s*['"]\/columns['"]/);
+  });
+
+  test('cancel button resets addingColumn state', () => {
+    expect(src).toMatch(/setAddingColumn\(false\)/);
+    expect(src).toMatch(/setNewColumnName\(['"]{2}\)/);
+  });
+});
+
+// ── Board header ────────────────────────────────────────────────────────
+
+describe('board header', () => {
+  test('shows board name in header', () => {
+    expect(src).toContain('board-header');
+    expect(src).toMatch(/\{list\.name\}/);
+  });
+
+  test('shows list icon with color', () => {
+    expect(src).toContain('list-icon');
+    expect(src).toMatch(/list\.color\s*\|\|\s*['"]var\(--primary\)['"]/);
+  });
+
+  test('has close button', () => {
+    expect(src).toMatch(/onClick=\{onClose\}[\s\S]*?Close/);
+  });
+});

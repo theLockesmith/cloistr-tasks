@@ -7,6 +7,7 @@ import AddListModal from './AddListModal';
 import AddTaskModal from './AddTaskModal';
 import DragDropList from './DragDropList';
 import LabelManager from './LabelManager';
+import BoardView from './BoardView';
 import { isSharedList, shareLabel, canWriteList } from '../lib/accessHelpers';
 
 function AuthenticatedApp() {
@@ -310,20 +311,28 @@ function AuthenticatedApp() {
                       </div>
                     </div>
                     
-                    <div className="list-stats">
-                      <div className="progress-bar">
-                        <div 
-                          className="progress-fill"
-                          style={{ 
-                            width: percentage + '%',
-                            backgroundColor: getProgressColor(percentage)
-                          }}
-                        ></div>
+                    {list.list_type === 'board' ? (
+                      <div className="list-stats">
+                        <p className="progress-text" style={{ fontStyle: 'italic' }}>
+                          📋 Kanban Board
+                        </p>
                       </div>
-                      <p className="progress-text">
-                        {list.completed_tasks || 0}/{list.total_tasks || 0} completed ({percentage}%)
-                      </p>
-                    </div>
+                    ) : (
+                      <div className="list-stats">
+                        <div className="progress-bar">
+                          <div
+                            className="progress-fill"
+                            style={{
+                              width: percentage + '%',
+                              backgroundColor: getProgressColor(percentage)
+                            }}
+                          ></div>
+                        </div>
+                        <p className="progress-text">
+                          {list.completed_tasks || 0}/{list.total_tasks || 0} completed ({percentage}%)
+                        </p>
+                      </div>
+                    )}
 
                     <div className="task-preview">
                       <h4 style={{ 
@@ -431,7 +440,14 @@ function AuthenticatedApp() {
         />
       )}
 
-      {selectedList && (
+      {selectedList && selectedList.list_type === 'board' ? (
+        <BoardView
+          list={selectedList}
+          onClose={() => setSelectedList(null)}
+          apiCall={apiCall}
+          user={user}
+        />
+      ) : selectedList && (
         <TaskListModal
           list={selectedList}
           onClose={() => setSelectedList(null)}

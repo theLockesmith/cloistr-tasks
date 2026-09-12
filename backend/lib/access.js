@@ -71,6 +71,32 @@ export async function templateAccess(pool, templateId, pubkey) {
 }
 
 /**
+ * Resolve access for a board card's parent list.
+ *
+ * @returns {Promise<{listId: number|null, columnId: number|null, access: string|null}>}
+ */
+export async function cardAccess(pool, cardId, pubkey) {
+  const result = await pool.query(`
+    SELECT tl.id   AS list_id,
+           bc.column_id,
+           CASE WHEN tl.user_id = $2 THEN 'owner'
+                ELSE tls.permission
+           END AS access
+    FROM board_cards bc
+    JOIN task_lists tl ON tl.id = bc.list_id
+    LEFT JOIN task_list_shares tls ON tls.list_id = tl.id AND tls.pubkey = $2
+    WHERE bc.id = $1
+  `, [cardId, pubkey]);
+
+  if (result.rows.length === 0) return { listId: null, columnId: null, access: null };
+  return {
+    listId: result.rows[0].list_id,
+    columnId: result.rows[0].column_id,
+    access: result.rows[0].access || null,
+  };
+}
+
+/**
  * Resolve access for a task instance's parent list.
  *
  * @returns {Promise<{listId: number|null, access: string|null}>}

@@ -119,8 +119,15 @@ function AddListModal({ onClose, onSave, apiCall }) {
             >
               <option value="recurring">Recurring Tasks (reset daily)</option>
               <option value="completion">Completion List (check off once)</option>
+              <option value="board">Board (Kanban columns)</option>
             </select>
-            <small>Recurring tasks reset daily, completion lists stay checked when done</small>
+            <small>
+              {formData.listType === 'board'
+                ? 'A Kanban board with columns and cards, like Trello'
+                : formData.listType === 'completion'
+                  ? 'Completion lists stay checked when done'
+                  : 'Recurring tasks reset daily'}
+            </small>
           </div>
 
           {formData.listType === 'recurring' && (

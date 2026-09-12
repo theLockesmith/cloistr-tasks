@@ -10,7 +10,7 @@ import promClient from 'prom-client';
 import { initializeDatabase, createPool, createAppPool } from './database/init.js';
 import { emptyToNull, toIntOrNull } from './utils.js';
 import { authenticateToken, optionalAuth, issueJWT } from './middleware/auth.js';
-import { listAccess, hasAccess, templateAccess, taskAccess } from './lib/access.js';
+import { listAccess, hasAccess, templateAccess, taskAccess, cardAccess } from './lib/access.js';
 
 // Import nostr-tools for signature verification
 import { verifyEvent, getPublicKey } from 'nostr-tools/pure';
@@ -577,7 +577,22 @@ app.post('/api/lists', authenticateToken, async (req, res) => {
       Array.isArray(custom_reset_days) ? custom_reset_days : [],
     ]);
 
-    res.status(201).json(result.rows[0]);
+    const newList = { ...result.rows[0], access: 'owner' };
+
+    // When creating a board, seed default columns so a write grantee (the
+    // fleet bridge) can place cards immediately without needing owner-level
+    // column creation.  The owner can rename/reorder/delete these later.
+    if ((list_type || 'recurring') === 'board') {
+      const defaultColumns = ['To Do', 'In Progress', 'Done'];
+      for (let i = 0; i < defaultColumns.length; i++) {
+        await pool.query(
+          'INSERT INTO board_columns (list_id, name, sort_order) VALUES ($1, $2, $3)',
+          [newList.id, defaultColumns[i], i + 1],
+        );
+      }
+    }
+
+    res.status(201).json(newList);
   } catch (error) {
     console.error('Error creating list:', error);
     res.status(500).json({ error: 'Failed to create list' });
@@ -1193,6 +1208,402 @@ app.delete('/api/lists/:listId/shares/:pubkey', authenticateToken, async (req, r
   } catch (error) {
     console.error('Error removing share:', error);
     res.status(500).json({ error: 'Failed to remove share' });
+  }
+});
+
+// ── Board endpoints ─────────────────────────────────────────────────────
+//
+// Boards are task_lists with list_type = 'board'.  They reuse the existing
+// access control:  listAccess() for list-level checks, cardAccess() for
+// card-level checks.
+//
+// Permission model:
+//   owner  → full control (columns, cards, comments, board settings)
+//   write  → create/move cards, post comments, edit/delete own comments
+//   read   → view everything
+
+// Get full board (columns + cards, one call)
+app.get('/api/boards/:listId', authenticateToken, async (req, res) => {
+  try {
+    const { listId } = req.params;
+    const access = await listAccess(pool, listId, req.user.id);
+    if (!access) {
+      return res.status(404).json({ error: 'Board not found' });
+    }
+
+    const [colResult, cardResult] = await Promise.all([
+      pool.query(`
+        SELECT id, name, color, sort_order, collapsed
+        FROM board_columns
+        WHERE list_id = $1
+        ORDER BY sort_order, id
+      `, [listId]),
+      pool.query(`
+        SELECT id, column_id, title, description, priority, due_date,
+               author_pubkey, assignee_pubkey, sort_order,
+               external_id, external_source, created_at, updated_at
+        FROM board_cards
+        WHERE list_id = $1
+        ORDER BY sort_order, id
+      `, [listId]),
+    ]);
+
+    // Group cards under their column for a single-call board reconstruction.
+    const cardsByColumn = {};
+    for (const card of cardResult.rows) {
+      if (!cardsByColumn[card.column_id]) cardsByColumn[card.column_id] = [];
+      cardsByColumn[card.column_id].push(card);
+    }
+
+    const columns = colResult.rows.map(col => ({
+      ...col,
+      cards: cardsByColumn[col.id] || [],
+    }));
+
+    res.json({ columns, access });
+  } catch (error) {
+    console.error('Error fetching board:', error);
+    res.status(500).json({ error: 'Failed to fetch board' });
+  }
+});
+
+// ── Board columns (owner-only CUD) ─────────────────────────────────────
+
+app.post('/api/boards/:listId/columns', authenticateToken, async (req, res) => {
+  try {
+    const { listId } = req.params;
+    const access = await listAccess(pool, listId, req.user.id);
+    if (!access) return res.status(404).json({ error: 'Board not found' });
+    if (!hasAccess(access, 'owner')) return res.status(403).json({ error: 'Column creation requires owner access' });
+
+    const { name, color } = req.body;
+    if (!name || !name.trim()) return res.status(400).json({ error: 'Column name is required' });
+
+    const sortResult = await pool.query(
+      'SELECT COALESCE(MAX(sort_order), 0) + 1 AS next FROM board_columns WHERE list_id = $1',
+      [listId],
+    );
+
+    const result = await pool.query(`
+      INSERT INTO board_columns (list_id, name, color, sort_order)
+      VALUES ($1, $2, $3, $4)
+      RETURNING *
+    `, [listId, name.trim(), emptyToNull(color), sortResult.rows[0].next]);
+
+    res.status(201).json({ ...result.rows[0], access });
+  } catch (error) {
+    console.error('Error creating column:', error);
+    res.status(500).json({ error: 'Failed to create column' });
+  }
+});
+
+app.put('/api/boards/:listId/columns/:columnId', authenticateToken, async (req, res) => {
+  try {
+    const { listId, columnId } = req.params;
+    const access = await listAccess(pool, listId, req.user.id);
+    if (!access) return res.status(404).json({ error: 'Board not found' });
+    if (!hasAccess(access, 'owner')) return res.status(403).json({ error: 'Column update requires owner access' });
+
+    const { name, color, sortOrder, collapsed } = req.body;
+
+    const result = await pool.query(`
+      UPDATE board_columns
+      SET name       = COALESCE($1, name),
+          color      = COALESCE($2, color),
+          sort_order = COALESCE($3, sort_order),
+          collapsed  = COALESCE($4, collapsed)
+      WHERE id = $5 AND list_id = $6
+      RETURNING *
+    `, [
+      name === undefined ? null : String(name).trim(),
+      emptyToNull(color),
+      toIntOrNull(sortOrder),
+      collapsed === undefined ? null : Boolean(collapsed),
+      columnId,
+      listId,
+    ]);
+
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Column not found' });
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error updating column:', error);
+    res.status(500).json({ error: 'Failed to update column' });
+  }
+});
+
+app.delete('/api/boards/:listId/columns/:columnId', authenticateToken, async (req, res) => {
+  try {
+    const { listId, columnId } = req.params;
+    const access = await listAccess(pool, listId, req.user.id);
+    if (!access) return res.status(404).json({ error: 'Board not found' });
+    if (!hasAccess(access, 'owner')) return res.status(403).json({ error: 'Column deletion requires owner access' });
+
+    const result = await pool.query(
+      'DELETE FROM board_columns WHERE id = $1 AND list_id = $2 RETURNING id',
+      [columnId, listId],
+    );
+
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Column not found' });
+    res.status(204).send();
+  } catch (error) {
+    console.error('Error deleting column:', error);
+    res.status(500).json({ error: 'Failed to delete column' });
+  }
+});
+
+// ── Board cards (write access for CUD) ──────────────────────────────────
+
+app.post('/api/boards/:listId/cards', authenticateToken, async (req, res) => {
+  try {
+    const { listId } = req.params;
+    const access = await listAccess(pool, listId, req.user.id);
+    if (!access) return res.status(404).json({ error: 'Board not found' });
+    if (!hasAccess(access, 'write')) return res.status(403).json({ error: 'Card creation requires write access' });
+
+    const { columnId, title, description, priority, dueDate,
+            assigneePubkey, externalId, externalSource } = req.body;
+    if (!columnId) return res.status(400).json({ error: 'columnId is required' });
+    if (!title || !title.trim()) return res.status(400).json({ error: 'Card title is required' });
+
+    // Verify column belongs to this board.
+    const colCheck = await pool.query(
+      'SELECT id FROM board_columns WHERE id = $1 AND list_id = $2',
+      [columnId, listId],
+    );
+    if (colCheck.rows.length === 0) return res.status(400).json({ error: 'Column not found on this board' });
+
+    const sortResult = await pool.query(
+      'SELECT COALESCE(MAX(sort_order), 0) + 1 AS next FROM board_cards WHERE column_id = $1',
+      [columnId],
+    );
+
+    const result = await pool.query(`
+      INSERT INTO board_cards (
+        column_id, list_id, title, description, priority, due_date,
+        author_pubkey, assignee_pubkey, sort_order, external_id, external_source
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      RETURNING *
+    `, [
+      columnId, listId, title.trim(), emptyToNull(description),
+      toIntOrNull(priority) || 3, emptyToNull(dueDate),
+      req.user.id, emptyToNull(assigneePubkey),
+      sortResult.rows[0].next,
+      emptyToNull(externalId), emptyToNull(externalSource),
+    ]);
+
+    res.status(201).json({ ...result.rows[0], access });
+  } catch (error) {
+    // Handle unique constraint on (external_source, external_id) for idempotency.
+    if (error.code === '23505' && error.constraint === 'idx_board_cards_external') {
+      const existing = await pool.query(
+        'SELECT * FROM board_cards WHERE external_source = $1 AND external_id = $2',
+        [req.body.externalSource, req.body.externalId],
+      );
+      // Re-resolve access for the idempotent response.
+      const dup = existing.rows[0];
+      const dupAccess = await listAccess(pool, dup.list_id, req.user.id);
+      return res.status(200).json({ ...dup, access: dupAccess });
+    }
+    console.error('Error creating card:', error);
+    res.status(500).json({ error: 'Failed to create card' });
+  }
+});
+
+app.put('/api/boards/:listId/cards/:cardId', authenticateToken, async (req, res) => {
+  try {
+    const { listId, cardId } = req.params;
+    const { access } = await cardAccess(pool, cardId, req.user.id);
+    if (!access) return res.status(404).json({ error: 'Card not found' });
+    if (!hasAccess(access, 'write')) return res.status(403).json({ error: 'Card update requires write access' });
+
+    const { title, description, priority, dueDate, assigneePubkey, sortOrder } = req.body;
+
+    const result = await pool.query(`
+      UPDATE board_cards
+      SET title           = COALESCE($1, title),
+          description     = COALESCE($2, description),
+          priority        = COALESCE($3, priority),
+          due_date        = COALESCE($4, due_date),
+          assignee_pubkey = COALESCE($5, assignee_pubkey),
+          sort_order      = COALESCE($6, sort_order)
+      WHERE id = $7 AND list_id = $8
+      RETURNING *
+    `, [
+      title === undefined ? null : String(title).trim(),
+      description === undefined ? null : emptyToNull(description),
+      toIntOrNull(priority),
+      dueDate === undefined ? null : emptyToNull(dueDate),
+      assigneePubkey === undefined ? null : emptyToNull(assigneePubkey),
+      toIntOrNull(sortOrder),
+      cardId, listId,
+    ]);
+
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Card not found' });
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error updating card:', error);
+    res.status(500).json({ error: 'Failed to update card' });
+  }
+});
+
+// Move a card to a different column (write access)
+app.post('/api/boards/:listId/cards/:cardId/move', authenticateToken, async (req, res) => {
+  try {
+    const { listId, cardId } = req.params;
+    const { access } = await cardAccess(pool, cardId, req.user.id);
+    if (!access) return res.status(404).json({ error: 'Card not found' });
+    if (!hasAccess(access, 'write')) return res.status(403).json({ error: 'Card move requires write access' });
+
+    const { columnId, sortOrder } = req.body;
+    if (!columnId) return res.status(400).json({ error: 'columnId is required' });
+
+    // Verify target column belongs to this board.
+    const colCheck = await pool.query(
+      'SELECT id FROM board_columns WHERE id = $1 AND list_id = $2',
+      [columnId, listId],
+    );
+    if (colCheck.rows.length === 0) return res.status(400).json({ error: 'Target column not found on this board' });
+
+    const newSort = toIntOrNull(sortOrder);
+    const sortVal = newSort !== null ? newSort : (
+      await pool.query(
+        'SELECT COALESCE(MAX(sort_order), 0) + 1 AS next FROM board_cards WHERE column_id = $1',
+        [columnId],
+      )
+    ).rows[0].next;
+
+    const result = await pool.query(`
+      UPDATE board_cards
+      SET column_id  = $1,
+          sort_order = $2
+      WHERE id = $3 AND list_id = $4
+      RETURNING *
+    `, [columnId, sortVal, cardId, listId]);
+
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Card not found' });
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error moving card:', error);
+    res.status(500).json({ error: 'Failed to move card' });
+  }
+});
+
+app.delete('/api/boards/:listId/cards/:cardId', authenticateToken, async (req, res) => {
+  try {
+    const { listId, cardId } = req.params;
+    const { access } = await cardAccess(pool, cardId, req.user.id);
+    if (!access) return res.status(404).json({ error: 'Card not found' });
+    if (!hasAccess(access, 'owner')) return res.status(403).json({ error: 'Card deletion requires owner access' });
+
+    const result = await pool.query(
+      'DELETE FROM board_cards WHERE id = $1 AND list_id = $2 RETURNING id',
+      [cardId, listId],
+    );
+
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Card not found' });
+    res.status(204).send();
+  } catch (error) {
+    console.error('Error deleting card:', error);
+    res.status(500).json({ error: 'Failed to delete card' });
+  }
+});
+
+// ── Card comments ───────────────────────────────────────────────────────
+
+app.get('/api/boards/:listId/cards/:cardId/comments', authenticateToken, async (req, res) => {
+  try {
+    const { listId, cardId } = req.params;
+    const { access } = await cardAccess(pool, cardId, req.user.id);
+    if (!access) return res.status(404).json({ error: 'Card not found' });
+
+    const result = await pool.query(`
+      SELECT id, card_id, author_pubkey, author_label, body,
+             external_source, external_id, created_at, updated_at
+      FROM card_comments
+      WHERE card_id = $1
+      ORDER BY created_at ASC
+    `, [cardId]);
+
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching comments:', error);
+    res.status(500).json({ error: 'Failed to fetch comments' });
+  }
+});
+
+app.post('/api/boards/:listId/cards/:cardId/comments', authenticateToken, async (req, res) => {
+  try {
+    const { listId, cardId } = req.params;
+    const { access } = await cardAccess(pool, cardId, req.user.id);
+    if (!access) return res.status(404).json({ error: 'Card not found' });
+    if (!hasAccess(access, 'write')) return res.status(403).json({ error: 'Commenting requires write access' });
+
+    const { body, authorLabel, externalSource, externalId } = req.body;
+    if (!body || !body.trim()) return res.status(400).json({ error: 'Comment body is required' });
+
+    const result = await pool.query(`
+      INSERT INTO card_comments (card_id, author_pubkey, author_label, body,
+                                  external_source, external_id)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING *
+    `, [
+      cardId, req.user.id, emptyToNull(authorLabel),
+      body.trim(), emptyToNull(externalSource), emptyToNull(externalId),
+    ]);
+
+    res.status(201).json({ ...result.rows[0], access });
+  } catch (error) {
+    // Idempotent: duplicate external comment returns existing.
+    if (error.code === '23505' && error.constraint === 'idx_card_comments_external') {
+      const existing = await pool.query(
+        'SELECT * FROM card_comments WHERE external_source = $1 AND external_id = $2',
+        [req.body.externalSource, req.body.externalId],
+      );
+      return res.status(200).json(existing.rows[0]);
+    }
+    console.error('Error creating comment:', error);
+    res.status(500).json({ error: 'Failed to create comment' });
+  }
+});
+
+app.put('/api/boards/:listId/comments/:commentId', authenticateToken, async (req, res) => {
+  try {
+    const { commentId } = req.params;
+    const { body } = req.body;
+    if (!body || !body.trim()) return res.status(400).json({ error: 'Comment body is required' });
+
+    // Only the comment author can edit.
+    const result = await pool.query(`
+      UPDATE card_comments
+      SET body = $1
+      WHERE id = $2 AND author_pubkey = $3
+      RETURNING *
+    `, [body.trim(), commentId, req.user.id]);
+
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Comment not found or not yours' });
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error updating comment:', error);
+    res.status(500).json({ error: 'Failed to update comment' });
+  }
+});
+
+app.delete('/api/boards/:listId/comments/:commentId', authenticateToken, async (req, res) => {
+  try {
+    const { commentId } = req.params;
+
+    // Only the comment author can delete.
+    const result = await pool.query(
+      'DELETE FROM card_comments WHERE id = $1 AND author_pubkey = $2 RETURNING id',
+      [commentId, req.user.id],
+    );
+
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Comment not found or not yours' });
+    res.status(204).send();
+  } catch (error) {
+    console.error('Error deleting comment:', error);
+    res.status(500).json({ error: 'Failed to delete comment' });
   }
 });
 
