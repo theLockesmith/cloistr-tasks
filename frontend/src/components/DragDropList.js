@@ -26,6 +26,9 @@ function DragDropList({ items, onReorder, renderItem, itemKey = 'id', className 
   const pendingDrag = useRef(null);
 
   // Find which list slot the pointer is over by checking bounding boxes.
+  // In grid mode, score on 2D Euclidean distance so items sharing a row
+  // are distinguished by horizontal position.  In list mode, vertical
+  // distance alone is correct and avoids horizontal jitter.
   const indexFromPoint = useCallback((clientX, clientY) => {
     let best = null;
     let bestDist = Infinity;
@@ -33,12 +36,15 @@ function DragDropList({ items, onReorder, renderItem, itemKey = 'id', className 
       const el = itemRefs.current[item[itemKey]];
       if (!el) return;
       const rect = el.getBoundingClientRect();
+      const cx = (rect.left + rect.right) / 2;
       const cy = (rect.top + rect.bottom) / 2;
-      const dist = Math.abs(clientY - cy);
+      const dist = isGrid
+        ? Math.hypot(clientX - cx, clientY - cy)
+        : Math.abs(clientY - cy);
       if (dist < bestDist) { bestDist = dist; best = idx; }
     });
     return best;
-  }, [items, itemKey]);
+  }, [items, itemKey, isGrid]);
 
   const handlePointerDown = useCallback((e, index) => {
     // Only respond to the primary pointer (left mouse button or first touch).

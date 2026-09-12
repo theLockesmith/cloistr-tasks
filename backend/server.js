@@ -18,6 +18,24 @@ import { nip19 } from 'nostr-tools';
 
 dotenv.config();
 
+// ── Field-length validation ────────────────────────────────────────────────
+// Generous caps for the TEXT columns (8192 clears any realistic NIP-44 sealed
+// value).  Labels use 2000 to stay safely under the btree page limit on the
+// UNIQUE(user_id, name) index.
+const FIELD_LIMITS = { name: 8192, title: 8192, label_name: 2000 };
+
+function fieldTooLong(value, field, limit) {
+  if (value != null && String(value).length > limit) {
+    return {
+      error: `${field} exceeds maximum length of ${limit} characters`,
+      field,
+      limit,
+      actual: String(value).length,
+    };
+  }
+  return null;
+}
+
 const app = express();
 const port = process.env.PORT || 3000;
 
@@ -546,6 +564,9 @@ app.post('/api/lists', authenticateToken, async (req, res) => {
       list_type, reset_enabled, reset_time, reset_days, custom_reset_days,
     } = req.body;
 
+    const nameErr = fieldTooLong(name, 'name', FIELD_LIMITS.name);
+    if (nameErr) return res.status(400).json(nameErr);
+
     // First, get the next sort order for this user
     const sortResult = await pool.query(`
       SELECT COALESCE(MAX(sort_order), 0) + 1 as next_sort_order
@@ -604,9 +625,25 @@ app.put('/api/lists/:listId', authenticateToken, async (req, res) => {
   try {
     const { listId } = req.params;
     const {
-      name, description, icon, color, sortOrder,
+      name, description, icon, color, sortOrder, visibility,
       list_type, reset_enabled, reset_time, reset_days, custom_reset_days,
     } = req.body;
+
+    if (name !== undefined) {
+      const nameErr = fieldTooLong(name, 'name', FIELD_LIMITS.name);
+      if (nameErr) return res.status(400).json(nameErr);
+    }
+
+    if (visibility !== undefined && !['private', 'public'].includes(visibility)) {
+      return res.status(400).json({ error: 'visibility must be "private" or "public"' });
+    }
+
+    if (visibility === 'public') {
+      const typeCheck = await pool.query('SELECT list_type FROM task_lists WHERE id = $1', [listId]);
+      if (typeCheck.rows[0]?.list_type !== 'board') {
+        return res.status(400).json({ error: 'Only boards can be made public' });
+      }
+    }
 
     const access = await listAccess(pool, listId, req.user.id);
     if (!access) {
@@ -628,7 +665,8 @@ app.put('/api/lists/:listId', authenticateToken, async (req, res) => {
           reset_enabled      = COALESCE($7, reset_enabled),
           reset_time         = COALESCE($8, reset_time),
           reset_days         = COALESCE($9, reset_days),
-          custom_reset_days  = COALESCE($10, custom_reset_days)
+          custom_reset_days  = COALESCE($10, custom_reset_days),
+          visibility         = COALESCE($13, visibility)
       WHERE id = $11 AND user_id = $12
       RETURNING *
     `, [
@@ -644,6 +682,7 @@ app.put('/api/lists/:listId', authenticateToken, async (req, res) => {
       Array.isArray(custom_reset_days) ? custom_reset_days : (custom_reset_days === undefined ? null : []),
       listId,
       req.user.id,
+      emptyToNull(visibility),
     ]);
 
     if (result.rows.length === 0) {
@@ -705,6 +744,8 @@ app.post('/api/lists/:listId/templates', authenticateToken, async (req, res) => 
     if (!name || !String(name).trim()) {
       return res.status(400).json({ error: 'Task name is required' });
     }
+    const nameErr = fieldTooLong(name, 'name', FIELD_LIMITS.name);
+    if (nameErr) return res.status(400).json(nameErr);
 
     // Access check: creating templates requires write access.
     const access = await listAccess(pool, listId, req.user.id);
@@ -811,6 +852,11 @@ app.put('/api/templates/:templateId', authenticateToken, async (req, res) => {
       name, description, timeSlot, estimatedMinutes, priority, dueDate,
       sort_order, reminderOffsetMinutes, labelIds,
     } = req.body;
+
+    if (name !== undefined) {
+      const nameErr = fieldTooLong(name, 'name', FIELD_LIMITS.name);
+      if (nameErr) return res.status(400).json(nameErr);
+    }
 
     const { access } = await templateAccess(pool, templateId, req.user.id);
     if (!access) {
@@ -1026,6 +1072,9 @@ app.post('/api/labels', authenticateToken, async (req, res) => {
     if (!name || !String(name).trim()) {
       return res.status(400).json({ error: 'Label name is required' });
     }
+    const labelNameErr = fieldTooLong(name, 'name', FIELD_LIMITS.label_name);
+    if (labelNameErr) return res.status(400).json(labelNameErr);
+
     const result = await pool.query(
       `INSERT INTO labels (user_id, name, color) VALUES ($1, $2, $3)
        ON CONFLICT (user_id, name) DO UPDATE SET color = EXCLUDED.color
@@ -1044,6 +1093,12 @@ app.put('/api/labels/:labelId', authenticateToken, async (req, res) => {
   try {
     const { labelId } = req.params;
     const { name, color } = req.body;
+
+    if (name !== undefined) {
+      const labelNameErr = fieldTooLong(name, 'name', FIELD_LIMITS.label_name);
+      if (labelNameErr) return res.status(400).json(labelNameErr);
+    }
+
     const result = await pool.query(
       `UPDATE labels
        SET name  = COALESCE($1, name),
@@ -1278,6 +1333,8 @@ app.post('/api/boards/:listId/columns', authenticateToken, async (req, res) => {
 
     const { name, color } = req.body;
     if (!name || !name.trim()) return res.status(400).json({ error: 'Column name is required' });
+    const nameErr = fieldTooLong(name, 'name', FIELD_LIMITS.name);
+    if (nameErr) return res.status(400).json(nameErr);
 
     const sortResult = await pool.query(
       'SELECT COALESCE(MAX(sort_order), 0) + 1 AS next FROM board_columns WHERE list_id = $1',
@@ -1305,6 +1362,11 @@ app.put('/api/boards/:listId/columns/:columnId', authenticateToken, async (req, 
     if (!hasAccess(access, 'owner')) return res.status(403).json({ error: 'Column update requires owner access' });
 
     const { name, color, sortOrder, collapsed } = req.body;
+
+    if (name !== undefined) {
+      const nameErr = fieldTooLong(name, 'name', FIELD_LIMITS.name);
+      if (nameErr) return res.status(400).json(nameErr);
+    }
 
     const result = await pool.query(`
       UPDATE board_columns
@@ -1364,6 +1426,8 @@ app.post('/api/boards/:listId/cards', authenticateToken, async (req, res) => {
             assigneePubkey, externalId, externalSource } = req.body;
     if (!columnId) return res.status(400).json({ error: 'columnId is required' });
     if (!title || !title.trim()) return res.status(400).json({ error: 'Card title is required' });
+    const titleErr = fieldTooLong(title, 'title', FIELD_LIMITS.title);
+    if (titleErr) return res.status(400).json(titleErr);
 
     // Verify column belongs to this board.
     const colCheck = await pool.query(
@@ -1418,6 +1482,11 @@ app.put('/api/boards/:listId/cards/:cardId', authenticateToken, async (req, res)
     if (!hasAccess(access, 'write')) return res.status(403).json({ error: 'Card update requires write access' });
 
     const { title, description, priority, dueDate, assigneePubkey, sortOrder } = req.body;
+
+    if (title !== undefined) {
+      const titleErr = fieldTooLong(title, 'title', FIELD_LIMITS.title);
+      if (titleErr) return res.status(400).json(titleErr);
+    }
 
     const result = await pool.query(`
       UPDATE board_cards
@@ -1518,8 +1587,9 @@ app.get('/api/boards/:listId/cards/:cardId/comments', authenticateToken, async (
     if (!access) return res.status(404).json({ error: 'Card not found' });
 
     const result = await pool.query(`
-      SELECT id, card_id, author_pubkey, author_label, body,
-             external_source, external_id, created_at, updated_at
+      SELECT id, card_id, list_id, author_pubkey, author_label, body,
+             parent_comment_id, deleted_at, external_source, external_id,
+             created_at, updated_at
       FROM card_comments
       WHERE card_id = $1
       ORDER BY created_at ASC
@@ -1542,24 +1612,42 @@ app.post('/api/boards/:listId/cards/:cardId/comments', authenticateToken, async 
     const { body, authorLabel, externalSource, externalId } = req.body;
     if (!body || !body.trim()) return res.status(400).json({ error: 'Comment body is required' });
 
+    const parentCommentId = toIntOrNull(req.body.parentCommentId);
+
+    // Scope the parent to the same card so threads cannot span boards.
+    if (parentCommentId != null) {
+      const parentRow = await pool.query(
+        'SELECT id FROM card_comments WHERE id = $1 AND card_id = $2',
+        [parentCommentId, cardId],
+      );
+      if (parentRow.rows.length === 0) {
+        return res.status(400).json({ error: 'Parent comment not found on this card' });
+      }
+    }
+
     const result = await pool.query(`
-      INSERT INTO card_comments (card_id, author_pubkey, author_label, body,
-                                  external_source, external_id)
-      VALUES ($1, $2, $3, $4, $5, $6)
+      INSERT INTO card_comments (card_id, list_id, author_pubkey, author_label, body,
+                                  parent_comment_id, external_source, external_id)
+      VALUES ($1, (SELECT list_id FROM board_cards WHERE id = $1), $2, $3, $4, $5, $6, $7)
       RETURNING *
     `, [
       cardId, req.user.id, emptyToNull(authorLabel),
-      body.trim(), emptyToNull(externalSource), emptyToNull(externalId),
+      body.trim(), parentCommentId, emptyToNull(externalSource), emptyToNull(externalId),
     ]);
 
     res.status(201).json({ ...result.rows[0], access });
   } catch (error) {
-    // Idempotent: duplicate external comment returns existing.
+    // Idempotent: duplicate external comment returns existing, but only
+    // if it belongs to this card.  Otherwise 409 (prevents leaking a
+    // comment from another board via the global external_source index).
     if (error.code === '23505' && error.constraint === 'idx_card_comments_external') {
       const existing = await pool.query(
-        'SELECT * FROM card_comments WHERE external_source = $1 AND external_id = $2',
-        [req.body.externalSource, req.body.externalId],
+        'SELECT * FROM card_comments WHERE external_source = $1 AND external_id = $2 AND card_id = $3',
+        [req.body.externalSource, req.body.externalId, cardId],
       );
+      if (existing.rows.length === 0) {
+        return res.status(409).json({ error: 'External identifier already in use on another board' });
+      }
       return res.status(200).json(existing.rows[0]);
     }
     console.error('Error creating comment:', error);
@@ -1593,7 +1681,26 @@ app.delete('/api/boards/:listId/comments/:commentId', authenticateToken, async (
   try {
     const { commentId } = req.params;
 
-    // Only the comment author can delete.
+    // Only the comment author can delete.  If the comment has replies,
+    // tombstone it (blank body + deleted_at) so the thread structure
+    // stays intact.  Leaf comments with no children are hard-deleted.
+    const childCheck = await pool.query(
+      'SELECT COUNT(*) AS count FROM card_comments WHERE parent_comment_id = $1',
+      [commentId],
+    );
+
+    if (parseInt(childCheck.rows[0].count, 10) > 0) {
+      const result = await pool.query(`
+        UPDATE card_comments
+        SET body = '', deleted_at = NOW()
+        WHERE id = $1 AND author_pubkey = $2 AND deleted_at IS NULL
+        RETURNING id
+      `, [commentId, req.user.id]);
+
+      if (result.rows.length === 0) return res.status(404).json({ error: 'Comment not found or not yours' });
+      return res.status(204).send();
+    }
+
     const result = await pool.query(
       'DELETE FROM card_comments WHERE id = $1 AND author_pubkey = $2 RETURNING id',
       [commentId, req.user.id],
@@ -1607,8 +1714,174 @@ app.delete('/api/boards/:listId/comments/:commentId', authenticateToken, async (
   }
 });
 
+// ── Board-level comments (not attached to any card) ─────────────────────
+
+app.get('/api/boards/:listId/comments', authenticateToken, async (req, res) => {
+  try {
+    const { listId } = req.params;
+    const access = await listAccess(pool, listId, req.user.id);
+    if (!access) return res.status(404).json({ error: 'Board not found' });
+
+    const result = await pool.query(`
+      SELECT id, list_id, author_pubkey, author_label, body,
+             parent_comment_id, deleted_at, external_source, external_id,
+             created_at, updated_at
+      FROM card_comments
+      WHERE list_id = $1 AND card_id IS NULL
+      ORDER BY created_at ASC
+    `, [listId]);
+
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching board comments:', error);
+    res.status(500).json({ error: 'Failed to fetch board comments' });
+  }
+});
+
+app.post('/api/boards/:listId/comments', authenticateToken, async (req, res) => {
+  try {
+    const { listId } = req.params;
+    const access = await listAccess(pool, listId, req.user.id);
+    if (!access) return res.status(404).json({ error: 'Board not found' });
+    if (!hasAccess(access, 'write')) return res.status(403).json({ error: 'Commenting requires write access' });
+
+    const { body, authorLabel, parentCommentId, externalSource, externalId } = req.body;
+    if (!body || !body.trim()) return res.status(400).json({ error: 'Comment body is required' });
+
+    const parsedParent = toIntOrNull(parentCommentId);
+
+    // Scope the parent to the same board and to board-level comments only
+    // (card_id IS NULL) so threads cannot span boards or mix card/board comments.
+    if (parsedParent != null) {
+      const parentRow = await pool.query(
+        'SELECT id FROM card_comments WHERE id = $1 AND list_id = $2 AND card_id IS NULL',
+        [parsedParent, listId],
+      );
+      if (parentRow.rows.length === 0) {
+        return res.status(400).json({ error: 'Parent comment not found on this board' });
+      }
+    }
+
+    const result = await pool.query(`
+      INSERT INTO card_comments (list_id, card_id, author_pubkey, author_label, body,
+                                  parent_comment_id, external_source, external_id)
+      VALUES ($1, NULL, $2, $3, $4, $5, $6, $7)
+      RETURNING *
+    `, [
+      listId, req.user.id, emptyToNull(authorLabel),
+      body.trim(), parsedParent,
+      emptyToNull(externalSource), emptyToNull(externalId),
+    ]);
+
+    res.status(201).json({ ...result.rows[0], access });
+  } catch (error) {
+    // Idempotent dedup, scoped to this board.  409 if the external id
+    // collides with a comment on a different board (prevents leaking).
+    if (error.code === '23505' && error.constraint === 'idx_card_comments_external') {
+      const existing = await pool.query(
+        'SELECT * FROM card_comments WHERE external_source = $1 AND external_id = $2 AND list_id = $3',
+        [req.body.externalSource, req.body.externalId, listId],
+      );
+      if (existing.rows.length === 0) {
+        return res.status(409).json({ error: 'External identifier already in use on another board' });
+      }
+      return res.status(200).json(existing.rows[0]);
+    }
+    console.error('Error creating board comment:', error);
+    res.status(500).json({ error: 'Failed to create board comment' });
+  }
+});
+
+// ── Public board endpoints (unauthenticated read for public boards) ─────
+// Comments are NOT exposed publicly: toggling a board public should not
+// retroactively publish every comment written while it was private.
+
+app.get('/api/public/boards/:listId', optionalAuth, async (req, res) => {
+  try {
+    const { listId } = req.params;
+
+    // If the caller is authenticated and has access, use the normal flow
+    // but read the real visibility from the row (never hardcode it).
+    if (req.user) {
+      const access = await listAccess(pool, listId, req.user.id);
+      if (access) {
+        const boardRow = await pool.query(
+          'SELECT visibility, list_type FROM task_lists WHERE id = $1',
+          [listId],
+        );
+        if (boardRow.rows.length === 0 || boardRow.rows[0].list_type !== 'board') {
+          return res.status(404).json({ error: 'Board not found' });
+        }
+
+        const [colResult, cardResult] = await Promise.all([
+          pool.query(`
+            SELECT id, name, color, sort_order, collapsed
+            FROM board_columns WHERE list_id = $1 ORDER BY sort_order, id
+          `, [listId]),
+          pool.query(`
+            SELECT id, column_id, title, description, priority, due_date,
+                   author_pubkey, assignee_pubkey, sort_order,
+                   external_id, external_source, created_at, updated_at
+            FROM board_cards WHERE list_id = $1 ORDER BY sort_order, id
+          `, [listId]),
+        ]);
+
+        const cardsByColumn = {};
+        for (const card of cardResult.rows) {
+          if (!cardsByColumn[card.column_id]) cardsByColumn[card.column_id] = [];
+          cardsByColumn[card.column_id].push(card);
+        }
+        const columns = colResult.rows.map(col => ({ ...col, cards: cardsByColumn[col.id] || [] }));
+        return res.json({ columns, access, visibility: boardRow.rows[0].visibility });
+      }
+    }
+
+    // Unauthenticated (or no access): only serve if the board is public.
+    const boardCheck = await pool.query(
+      "SELECT id, name FROM task_lists WHERE id = $1 AND list_type = 'board' AND visibility = 'public'",
+      [listId],
+    );
+    if (boardCheck.rows.length === 0) return res.status(404).json({ error: 'Board not found' });
+
+    const [colResult, cardResult] = await Promise.all([
+      pool.query(`
+        SELECT id, name, color, sort_order, collapsed
+        FROM board_columns WHERE list_id = $1 ORDER BY sort_order, id
+      `, [listId]),
+      // Omit external_source cards from public view: they may contain
+      // data the board owner imported under terms that do not extend to
+      // anonymous readers.
+      pool.query(`
+        SELECT id, column_id, title, description, priority, due_date,
+               author_pubkey, assignee_pubkey, sort_order,
+               created_at, updated_at
+        FROM board_cards
+        WHERE list_id = $1 AND external_source IS NULL
+        ORDER BY sort_order, id
+      `, [listId]),
+    ]);
+
+    const cardsByColumn = {};
+    for (const card of cardResult.rows) {
+      if (!cardsByColumn[card.column_id]) cardsByColumn[card.column_id] = [];
+      cardsByColumn[card.column_id].push(card);
+    }
+    const columns = colResult.rows.map(col => ({ ...col, cards: cardsByColumn[col.id] || [] }));
+
+    res.json({ columns, access: 'public', visibility: 'public', board: boardCheck.rows[0] });
+  } catch (error) {
+    console.error('Error fetching public board:', error);
+    res.status(500).json({ error: 'Failed to fetch public board' });
+  }
+});
+
 // Error handling middleware
 app.use((error, req, res, next) => {
+  // SQLSTATE 22001: string_data_right_truncation.  Belt-and-braces behind
+  // the per-field checks for any bounded column the migration did not widen.
+  if (error.code === '22001') {
+    return res.status(400).json({ error: 'A value was too long for its column' });
+  }
   console.error('Unhandled error:', error);
   res.status(500).json({ error: 'Internal server error' });
 });
