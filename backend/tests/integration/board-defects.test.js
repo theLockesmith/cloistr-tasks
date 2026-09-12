@@ -7,6 +7,11 @@
  * Setup:  a throwaway Postgres (see setup.js for env vars).
  * Runner: jest --experimental-vm-modules (project is ESM).
  *
+ * Schema is bootstrapped via the stock initializeDatabase() path,
+ * which is the same code production runs on startup.  No workarounds,
+ * no view-dropping harness.  If a migration fails here, it fails in
+ * production too, and that is the point.
+ *
  * Defect catalogue:
  *   1. Private board via /api/public/boards/:id returns visibility:'private'
  *   2. Reply naming a parent on another board is refused
@@ -17,28 +22,12 @@
 import { jest } from '@jest/globals';
 import supertest from 'supertest';
 import jwt from 'jsonwebtoken';
-import pg from 'pg';
 
 // setup.js must run before anything that reads process.env.JWT_SECRET.
 import './setup.js';
 
-import { createPool } from '../../database/init.js';
+import { initializeDatabase, createPool } from '../../database/init.js';
 import { app, setPool } from '../../server.js';
-
-// We cannot use the stock initializeDatabase() directly because migration
-// 012 tries to ALTER COLUMN TYPE on columns referenced by the todays_tasks
-// view, and Postgres blocks that.  Production ran these migrations in order
-// against a database where the view was already dropped and recreated. In
-// a fresh test DB we hit the race.  Work around it by running the migration
-// SQL ourselves with the view dropped around the ALTER.
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const MIGRATIONS_DIR = path.join(__dirname, '..', '..', 'database', 'migrations');
-
-const { Pool } = pg;
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
@@ -50,89 +39,18 @@ function authHeader(pubkey) {
   return `Bearer ${token}`;
 }
 
-/** Run all migration files in order, dropping and recreating the
- *  todays_tasks view around migration 012 to avoid the ALTER TYPE block. */
-async function bootstrapSchema(pool) {
-  // Create migrations tracking table
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS migrations (
-      id SERIAL PRIMARY KEY,
-      filename VARCHAR(255) NOT NULL UNIQUE,
-      executed_at TIMESTAMP DEFAULT NOW()
-    )
-  `);
-
-  const files = fs.readdirSync(MIGRATIONS_DIR)
-    .filter(f => f.endsWith('.sql'))
-    .sort();
-
-  for (const file of files) {
-    const already = await pool.query(
-      'SELECT 1 FROM migrations WHERE filename = $1', [file]);
-    if (already.rows.length > 0) continue;
-
-    // Before migration 012, drop views that block ALTER TYPE on name columns.
-    if (file === '012_widen_name_columns.sql') {
-      await pool.query('DROP VIEW IF EXISTS todays_tasks CASCADE');
-      await pool.query('DROP VIEW IF EXISTS user_tasks_today CASCADE');
-    }
-
-    const sql = fs.readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8');
-    await pool.query(sql);
-    await pool.query('INSERT INTO migrations (filename) VALUES ($1)', [file]);
-  }
-
-  // Recreate views that were dropped before migration 012.
-  await pool.query(`
-    CREATE OR REPLACE VIEW todays_tasks AS
-    SELECT
-      t.id, t.completed_at, t.notes,
-      tt.name, tt.description, tt.time_slot, tt.estimated_minutes,
-      tl.name as list_name, tl.icon as list_icon, tl.color as list_color,
-      CASE WHEN t.completed_at IS NOT NULL THEN true ELSE false END as completed
-    FROM tasks t
-    JOIN task_templates tt ON t.template_id = tt.id
-    JOIN task_lists tl ON t.list_id = tl.id
-    WHERE DATE(t.reset_date) = CURRENT_DATE
-    ORDER BY tl.sort_order, tt.sort_order
-  `);
-  await pool.query(`
-    CREATE OR REPLACE VIEW user_tasks_today AS
-    SELECT
-      t.id, t.completed_at, t.notes,
-      tt.name, tt.description, tt.time_slot, tt.estimated_minutes,
-      tl.name as list_name, tl.icon as list_icon, tl.color as list_color,
-      tl.user_id, u.username, us.reset_time, us.reset_timezone,
-      CASE WHEN t.completed_at IS NOT NULL THEN true ELSE false END as completed
-    FROM tasks t
-    JOIN task_templates tt ON t.template_id = tt.id
-    JOIN task_lists tl ON t.list_id = tl.id
-    JOIN users u ON tl.user_id = u.id
-    LEFT JOIN user_settings us ON u.id = us.user_id
-    WHERE DATE(t.reset_date) = CURRENT_DATE
-    ORDER BY tl.sort_order, tt.sort_order
-  `);
-}
-
 // ── Global fixtures ────────────────────────────────────────────────────
 
 let pool;
 let request;
 
 beforeAll(async () => {
-  // Create the test database if it doesn't exist.
-  const adminPool = createPool('postgres');
-  try {
-    await adminPool.query(`CREATE DATABASE "${process.env.DB_NAME}"`);
-  } catch (e) {
-    if (e.code !== '42P04') throw e; // ignore "already exists"
-  }
-  await adminPool.end();
+  // Run the stock initializeDatabase(), which creates the DB if needed
+  // and applies every migration in filename order.  This is the same
+  // code path production takes on pod startup.
+  await initializeDatabase();
 
-  // Connect to the test DB and bootstrap schema.
-  pool = createPool(process.env.DB_NAME);
-  await bootstrapSchema(pool);
-
+  // Connect to the test DB and wire up supertest.
   pool = createPool(process.env.DB_NAME);
   setPool(pool);
   request = supertest(app);
