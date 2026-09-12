@@ -73,6 +73,17 @@ test:backend:
   extends: .cloistr-rules
   stage: test
   image: node:22.23.2-alpine
+  services:
+    - name: postgres:16-alpine
+      alias: postgres
+  variables:
+    POSTGRES_PASSWORD: postgres
+    DB_HOST: postgres
+    DB_PORT: "5432"
+    DB_USER: postgres
+    DB_PASSWORD: postgres
+    DB_NAME: cloistr_tasks_test
+    JWT_SECRET: ci-test-secret-not-a-known-placeholder-8d3f7a1b
   script:
     - cd backend
     - npm ci

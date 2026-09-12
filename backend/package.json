@@ -50,6 +50,8 @@
   "homepage": "https://github.com/yourusername/task-manager#readme",
   "jest": {
     "testEnvironment": "node",
-    "transform": {}
+    "transform": {},
+    "testTimeout": 30000,
+    "forceExit": true
   }
 }

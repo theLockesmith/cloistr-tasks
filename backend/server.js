@@ -1643,7 +1643,7 @@ app.post('/api/boards/:listId/cards/:cardId/comments', authenticateToken, async 
     if (error.code === '23505' && error.constraint === 'idx_card_comments_external') {
       const existing = await pool.query(
         'SELECT * FROM card_comments WHERE external_source = $1 AND external_id = $2 AND card_id = $3',
-        [req.body.externalSource, req.body.externalId, cardId],
+        [req.body.externalSource, req.body.externalId, req.params.cardId],
       );
       if (existing.rows.length === 0) {
         return res.status(409).json({ error: 'External identifier already in use on another board' });
@@ -1908,5 +1908,15 @@ process.on('SIGINT', async () => {
   process.exit(0);
 });
 
-// Start the server
-startServer();
+// Allow tests to inject a pool without calling startServer().
+function setPool(p) { pool = p; }
+
+export { app, startServer, setPool };
+
+// Start the server when this file is executed directly (not imported by tests).
+const isMain = import.meta.url === `file://${process.argv[1]}`;
+if (isMain) {
+  startServer();
+} else {
+  // Module imported as dependency (e.g. by tests) — do not auto-start.
+}
