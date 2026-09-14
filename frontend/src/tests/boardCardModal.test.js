@@ -121,7 +121,7 @@ describe('dirty tracking and save', () => {
     // The handleSave function calls onCardUpdated()
     const saveSection = src.slice(
       src.indexOf('handleSave'),
-      src.indexOf('handleSave') + 500,
+      src.indexOf('handleSave') + 700,
     );
     expect(saveSection).toContain('onCardUpdated()');
   });

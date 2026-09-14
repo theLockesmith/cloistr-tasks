@@ -1595,6 +1595,21 @@ body {
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 
+.board-card[draggable="true"] {
+  cursor: grab;
+}
+
+.board-card[draggable="true"]:active {
+  cursor: grabbing;
+  opacity: 0.6;
+}
+
+.board-column-drop-target {
+  outline: 2px dashed var(--primary);
+  outline-offset: -2px;
+  background: color-mix(in srgb, var(--primary) 8%, var(--background));
+}
+
 .board-card:hover {
   border-color: var(--primary);
   box-shadow: var(--shadow-sm);
@@ -1621,6 +1636,118 @@ body {
 
 .board-card-assignee {
   font-size: 0.75rem;
+}
+
+/* Assignee field in card modal */
+.board-card-assignee-field {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.board-card-assignee-field input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Expanded description overlay */
+.board-card-desc-expanded-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+}
+
+.board-card-desc-expanded {
+  background: var(--surface);
+  border-radius: 12px;
+  padding: 1.5rem;
+  width: 100%;
+  max-width: 640px;
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.board-card-desc-expanded textarea {
+  flex: 1;
+  min-height: 200px;
+  resize: vertical;
+  padding: 0.75rem;
+  border: 1.5px solid var(--border);
+  border-radius: 8px;
+  background: var(--background);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+
+.board-card-desc-expanded textarea:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+.board-card-desc-ro {
+  cursor: pointer;
+}
+
+.board-card-desc-ro:hover {
+  color: var(--primary);
+}
+
+/* Card context menu */
+.card-context-menu {
+  position: fixed;
+  z-index: 1300;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.25rem;
+  min-width: 160px;
+  box-shadow: var(--shadow-lg, 0 8px 24px rgba(0,0,0,0.2));
+}
+
+.card-context-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.85rem;
+  color: var(--text);
+  cursor: pointer;
+  border-radius: 6px;
+  transition: background 0.1s;
+}
+
+.card-context-menu-item:hover {
+  background: var(--border);
+}
+
+.card-context-menu-item.danger {
+  color: var(--error);
+}
+
+.card-context-menu-item.danger:hover {
+  background: color-mix(in srgb, var(--error) 12%, transparent);
+}
+
+.card-context-menu-item:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.card-context-menu-sep {
+  height: 1px;
+  background: var(--border);
+  margin: 0.25rem 0.5rem;
 }
 
 .board-add-card-btn {

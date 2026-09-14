@@ -5,12 +5,14 @@ function BoardCardModal({ card, columns, listId, access, apiCall, user, onClose,
   const [description, setDescription] = useState(card.description || '');
   const [priority, setPriority] = useState(card.priority || 3);
   const [dueDate, setDueDate] = useState(card.due_date ? card.due_date.split('T')[0] : '');
+  const [assigneePubkey, setAssigneePubkey] = useState(card.assignee_pubkey || '');
   const [comments, setComments] = useState([]);
   const [newComment, setNewComment] = useState('');
   const [editingCommentId, setEditingCommentId] = useState(null);
   const [editingCommentBody, setEditingCommentBody] = useState('');
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
+  const [descriptionExpanded, setDescriptionExpanded] = useState(false);
 
   const canWrite = access === 'owner' || access === 'write';
   const isOwner = access === 'owner';
@@ -33,13 +35,14 @@ function BoardCardModal({ card, columns, listId, access, apiCall, user, onClose,
   useEffect(() => {
     const handleKeyDown = (e) => {
       if (e.key === 'Escape') {
-        if (editingCommentId) { setEditingCommentId(null); setEditingCommentBody(''); }
+        if (descriptionExpanded) setDescriptionExpanded(false);
+        else if (editingCommentId) { setEditingCommentId(null); setEditingCommentBody(''); }
         else onClose();
       }
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [onClose, editingCommentId]);
+  }, [onClose, editingCommentId, descriptionExpanded]);
 
   const handleSave = async () => {
     if (!dirty) return;
@@ -52,6 +55,7 @@ function BoardCardModal({ card, columns, listId, access, apiCall, user, onClose,
           description: description.trim() || null,
           priority,
           dueDate: dueDate || null,
+          assigneePubkey: assigneePubkey.trim() || null,
         }),
       });
       if (response.ok) {
@@ -185,14 +189,43 @@ function BoardCardModal({ card, columns, listId, access, apiCall, user, onClose,
           <div className="board-card-field">
             <label>Description</label>
             {canWrite ? (
-              <textarea
-                value={description}
-                onChange={e => { setDescription(e.target.value); setDirty(true); }}
-                placeholder="Add a description..."
-                rows={3}
-              />
+              descriptionExpanded ? (
+                <div className="board-card-desc-expanded-overlay" onClick={() => setDescriptionExpanded(false)}>
+                  <div className="board-card-desc-expanded" onClick={e => e.stopPropagation()}>
+                    <textarea
+                      value={description}
+                      onChange={e => { setDescription(e.target.value); setDirty(true); }}
+                      placeholder="Add a description..."
+                      autoFocus
+                    />
+                    <button
+                      className="btn btn-secondary btn-small"
+                      onClick={() => setDescriptionExpanded(false)}
+                    >
+                      Collapse
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <textarea
+                  value={description}
+                  onChange={e => { setDescription(e.target.value); setDirty(true); }}
+                  onClick={() => { if (description) setDescriptionExpanded(true); }}
+                  placeholder="Add a description..."
+                  rows={3}
+                  title="Click to expand"
+                  style={{ cursor: description ? 'pointer' : 'text' }}
+                />
+              )
             ) : (
-              <p className="board-card-desc-ro">{description || 'No description'}</p>
+              <p
+                className="board-card-desc-ro"
+                onClick={() => { if (description) setDescriptionExpanded(true); }}
+                style={{ cursor: description ? 'pointer' : 'default' }}
+                title={description ? 'Click to expand' : undefined}
+              >
+                {description || 'No description'}
+              </p>
             )}
           </div>
 
@@ -230,19 +263,55 @@ function BoardCardModal({ card, columns, listId, access, apiCall, user, onClose,
             </div>
           </div>
 
-          {canWrite && (
+          <div className="board-card-field-row">
             <div className="board-card-field">
-              <label>Move to Column</label>
-              <select
-                value={card.column_id}
-                onChange={e => handleMove(e.target.value)}
-              >
-                {columns.map(col => (
-                  <option key={col.id} value={col.id}>{col.name}</option>
-                ))}
-              </select>
+              <label>Assignee</label>
+              {canWrite ? (
+                <div className="board-card-assignee-field">
+                  <input
+                    type="text"
+                    value={assigneePubkey}
+                    onChange={e => { setAssigneePubkey(e.target.value); setDirty(true); }}
+                    placeholder="Pubkey (hex or npub)"
+                  />
+                  {user?.pubkey && !assigneePubkey && (
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-small"
+                      onClick={() => { setAssigneePubkey(user.pubkey); setDirty(true); }}
+                    >
+                      Assign me
+                    </button>
+                  )}
+                  {assigneePubkey && (
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-small"
+                      onClick={() => { setAssigneePubkey(''); setDirty(true); }}
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <span>{assigneePubkey ? truncatePubkey(assigneePubkey) : 'Unassigned'}</span>
+              )}
             </div>
-          )}
+
+            {canWrite && (
+              <div className="board-card-field">
+                <label>Move to Column</label>
+                <select
+                  value={card.column_id}
+                  onChange={e => handleMove(e.target.value)}
+                >
+                  {columns.map(col => (
+                    <option key={col.id} value={col.id}>{col.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Save / Delete actions */}
@@ -355,6 +424,27 @@ function BoardCardModal({ card, columns, listId, access, apiCall, user, onClose,
           <button onClick={onClose} className="btn btn-secondary">Close</button>
         </div>
       </div>
+
+      {/* Expanded description overlay (read-only view) */}
+      {descriptionExpanded && !canWrite && (
+        <div
+          className="board-card-desc-expanded-overlay"
+          onClick={() => setDescriptionExpanded(false)}
+        >
+          <div
+            className="board-card-desc-expanded"
+            onClick={e => e.stopPropagation()}
+          >
+            <p style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{description}</p>
+            <button
+              className="btn btn-secondary btn-small"
+              onClick={() => setDescriptionExpanded(false)}
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

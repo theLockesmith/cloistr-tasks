@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import ReactDOM from 'react-dom';
 import BoardCardModal from './BoardCardModal';
+import { useCardContextMenu, CardContextMenu } from './CardContextMenu';
 import DragDropList from './DragDropList';
 import EditListModal from './EditListModal';
 import { isListOwner, canWriteList } from '../lib/accessHelpers';
@@ -19,6 +21,9 @@ function BoardView({ list, onClose, apiCall, user }) {
   const [showEditBoard, setShowEditBoard] = useState(false);
   const [boardName, setBoardName] = useState(list.name);
   const [boardDescription, setBoardDescription] = useState(list.description);
+  const [dropTargetColumnId, setDropTargetColumnId] = useState(null);
+  const [contextCard, setContextCard] = useState(null);
+  const cardMenu = useCardContextMenu();
 
   const loadBoard = useCallback(async () => {
     try {
@@ -175,6 +180,20 @@ function BoardView({ list, onClose, apiCall, user }) {
     }
   };
 
+  const handleMoveCard = async (cardId, targetColumnId) => {
+    try {
+      const response = await apiCall('/boards/' + list.id + '/cards/' + cardId + '/move', {
+        method: 'POST',
+        body: JSON.stringify({ columnId: targetColumnId }),
+      });
+      if (response.ok) {
+        loadBoard();
+      }
+    } catch (err) {
+      console.error('Error moving card:', err);
+    }
+  };
+
   // ── Helpers ──────────────────────────────────────────────────────────
 
   const getPriorityColor = (p) => {
@@ -225,7 +244,20 @@ function BoardView({ list, onClose, apiCall, user }) {
   }
 
   const renderColumn = (column) => (
-    <div className="board-column">
+    <div
+      className={'board-column' + (dropTargetColumnId === column.id ? ' board-column-drop-target' : '')}
+      onDragOver={canWrite ? (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDropTargetColumnId(column.id); } : undefined}
+      onDragLeave={(e) => {
+        // Only clear if leaving the column itself, not entering a child.
+        if (!e.currentTarget.contains(e.relatedTarget)) setDropTargetColumnId(null);
+      }}
+      onDrop={canWrite ? (e) => {
+        e.preventDefault();
+        setDropTargetColumnId(null);
+        const cardId = e.dataTransfer.getData('application/x-card-id');
+        if (cardId) handleMoveCard(Number(cardId), column.id);
+      } : undefined}
+    >
       <div
         className="board-column-header"
         style={{ borderTopColor: column.color || 'var(--primary)' }}
@@ -284,6 +316,15 @@ function BoardView({ list, onClose, apiCall, user }) {
             <div
               key={card.id}
               className="board-card"
+              draggable={canWrite}
+              onDragStart={canWrite ? (e) => {
+                e.dataTransfer.setData('application/x-card-id', String(card.id));
+                e.dataTransfer.effectAllowed = 'move';
+              } : undefined}
+              onContextMenu={(e) => {
+                setContextCard({ ...card, _columnId: column.id });
+                cardMenu.open(e);
+              }}
               onClick={() => setSelectedCard({ ...card, _columnName: column.name })}
             >
               <div className="board-card-title">{card.title}</div>
@@ -346,88 +387,90 @@ function BoardView({ list, onClose, apiCall, user }) {
   );
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="board-modal" onClick={e => e.stopPropagation()}>
-        <div className="board-header">
-          <div className="board-header-left">
-            <div
-              className="list-icon"
-              style={{ backgroundColor: list.color || 'var(--primary)' }}
-            >
-              {list.icon || boardName.charAt(0).toUpperCase()}
+    <>
+      <div className="modal-overlay" onClick={onClose}>
+        <div className="board-modal" onClick={e => e.stopPropagation()}>
+          <div className="board-header">
+            <div className="board-header-left">
+              <div
+                className="list-icon"
+                style={{ backgroundColor: list.color || 'var(--primary)' }}
+              >
+                {list.icon || boardName.charAt(0).toUpperCase()}
+              </div>
+              <div>
+                <h2>{boardName}</h2>
+                {boardDescription && <p>{boardDescription}</p>}
+              </div>
             </div>
-            <div>
-              <h2>{boardName}</h2>
-              {boardDescription && <p>{boardDescription}</p>}
+            <div className="board-header-actions">
+              {isOwner && (
+                <button
+                  className="btn btn-secondary btn-small"
+                  onClick={() => setShowEditBoard(true)}
+                  title="Board settings"
+                >
+                  ⚙
+                </button>
+              )}
+              {isOwner && (
+                <button
+                  className="btn btn-secondary btn-small"
+                  onClick={() => setAddingColumn(true)}
+                >
+                  + Column
+                </button>
+              )}
+              <button onClick={onClose} className="btn btn-primary btn-small">Close</button>
             </div>
           </div>
-          <div className="board-header-actions">
-            {isOwner && (
-              <button
-                className="btn btn-secondary btn-small"
-                onClick={() => setShowEditBoard(true)}
-                title="Board settings"
-              >
-                ⚙
-              </button>
+
+          <div className="board-container">
+            {isOwner && columns.length > 1 ? (
+              <DragDropList
+                items={columns}
+                onReorder={handleReorderColumns}
+                itemKey="id"
+                isGrid={true}
+                className="board-columns-drag"
+                renderItem={renderColumn}
+              />
+            ) : (
+              columns.map(column => (
+                <React.Fragment key={column.id}>
+                  {renderColumn(column)}
+                </React.Fragment>
+              ))
             )}
-            {isOwner && (
-              <button
-                className="btn btn-secondary btn-small"
-                onClick={() => setAddingColumn(true)}
-              >
-                + Column
-              </button>
+
+            {addingColumn && (
+              <div className="board-column board-column-new">
+                <form onSubmit={handleAddColumn}>
+                  <input
+                    type="text"
+                    placeholder="Column name..."
+                    value={newColumnName}
+                    onChange={e => setNewColumnName(e.target.value)}
+                    autoFocus
+                  />
+                  <div className="board-add-card-actions">
+                    <button type="submit" className="btn btn-primary btn-small">Add</button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-small"
+                      onClick={() => { setAddingColumn(false); setNewColumnName(''); }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </form>
+              </div>
             )}
-            <button onClick={onClose} className="btn btn-primary btn-small">Close</button>
           </div>
-        </div>
-
-        <div className="board-container">
-          {isOwner && columns.length > 1 ? (
-            <DragDropList
-              items={columns}
-              onReorder={handleReorderColumns}
-              itemKey="id"
-              isGrid={true}
-              className="board-columns-drag"
-              renderItem={renderColumn}
-            />
-          ) : (
-            columns.map(column => (
-              <React.Fragment key={column.id}>
-                {renderColumn(column)}
-              </React.Fragment>
-            ))
-          )}
-
-          {addingColumn && (
-            <div className="board-column board-column-new">
-              <form onSubmit={handleAddColumn}>
-                <input
-                  type="text"
-                  placeholder="Column name..."
-                  value={newColumnName}
-                  onChange={e => setNewColumnName(e.target.value)}
-                  autoFocus
-                />
-                <div className="board-add-card-actions">
-                  <button type="submit" className="btn btn-primary btn-small">Add</button>
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-small"
-                    onClick={() => { setAddingColumn(false); setNewColumnName(''); }}
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </form>
-            </div>
-          )}
         </div>
       </div>
 
-      {showEditBoard && (
+      {showEditBoard && ReactDOM.createPortal(
         <EditListModal
           list={{ ...list, name: boardName, description: boardDescription }}
           onClose={() => setShowEditBoard(false)}
@@ -441,10 +484,52 @@ function BoardView({ list, onClose, apiCall, user }) {
             onClose();
           }}
           apiCall={apiCall}
+        />,
+        document.body
+      )}
+
+      {cardMenu.isOpen && contextCard && (
+        <CardContextMenu
+          anchorPoint={cardMenu.anchorPoint}
+          onClose={cardMenu.close}
+          items={[
+            ...columns
+              .filter(col => col.id !== contextCard._columnId)
+              .map(col => ({
+                key: 'move-' + col.id,
+                label: 'Move to ' + col.name,
+                onClick: () => handleMoveCard(contextCard.id, col.id),
+              })),
+            ...(columns.filter(col => col.id !== contextCard._columnId).length > 0
+              ? [{ key: 'sep-1', separator: true }]
+              : []),
+            {
+              key: 'open',
+              label: 'Open card',
+              onClick: () => setSelectedCard({ ...contextCard, _columnName: columns.find(c => c.id === contextCard._columnId)?.name }),
+            },
+            ...(isOwner ? [
+              { key: 'sep-2', separator: true },
+              {
+                key: 'delete',
+                label: 'Delete card',
+                danger: true,
+                onClick: async () => {
+                  if (!window.confirm('Delete this card?')) return;
+                  try {
+                    await apiCall('/boards/' + list.id + '/cards/' + contextCard.id, { method: 'DELETE' });
+                    loadBoard();
+                  } catch (err) {
+                    console.error('Error deleting card:', err);
+                  }
+                },
+              },
+            ] : []),
+          ]}
         />
       )}
 
-      {selectedCard && (
+      {selectedCard && ReactDOM.createPortal(
         <BoardCardModal
           card={selectedCard}
           columns={columns}
@@ -457,9 +542,10 @@ function BoardView({ list, onClose, apiCall, user }) {
             setSelectedCard(null);
             loadBoard();
           }}
-        />
+        />,
+        document.body
       )}
-    </div>
+    </>
   );
 }
 
