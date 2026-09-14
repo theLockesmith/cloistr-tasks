@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import BoardCardModal from './BoardCardModal';
+import DragDropList from './DragDropList';
+import EditListModal from './EditListModal';
 import { isListOwner, canWriteList } from '../lib/accessHelpers';
 
 function BoardView({ list, onClose, apiCall, user }) {
@@ -12,6 +14,11 @@ function BoardView({ list, onClose, apiCall, user }) {
   const [newCardTitle, setNewCardTitle] = useState('');
   const [addingColumn, setAddingColumn] = useState(false);
   const [newColumnName, setNewColumnName] = useState('');
+  const [editingColumnId, setEditingColumnId] = useState(null);
+  const [editingColumnName, setEditingColumnName] = useState('');
+  const [showEditBoard, setShowEditBoard] = useState(false);
+  const [boardName, setBoardName] = useState(list.name);
+  const [boardDescription, setBoardDescription] = useState(list.description);
 
   const loadBoard = useCallback(async () => {
     try {
@@ -40,16 +47,20 @@ function BoardView({ list, onClose, apiCall, user }) {
       if (e.key === 'Escape') {
         if (selectedCard) setSelectedCard(null);
         else if (addingCardColumnId) { setAddingCardColumnId(null); setNewCardTitle(''); }
+        else if (editingColumnId) { setEditingColumnId(null); setEditingColumnName(''); }
         else if (addingColumn) { setAddingColumn(false); setNewColumnName(''); }
+        else if (showEditBoard) setShowEditBoard(false);
         else onClose();
       }
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [onClose, selectedCard, addingCardColumnId, addingColumn]);
+  }, [onClose, selectedCard, addingCardColumnId, addingColumn, editingColumnId, showEditBoard]);
 
   const canWrite = access === 'owner' || access === 'write';
   const isOwner = access === 'owner';
+
+  // ── Column operations ────────────────────────────────────────────────
 
   const handleAddColumn = async (e) => {
     e.preventDefault();
@@ -70,7 +81,12 @@ function BoardView({ list, onClose, apiCall, user }) {
   };
 
   const handleDeleteColumn = async (columnId) => {
-    if (!window.confirm('Delete this column and all its cards?')) return;
+    const col = columns.find(c => c.id === columnId);
+    const cardCount = (col?.cards || []).length;
+    const msg = cardCount > 0
+      ? `Delete "${col.name}" and its ${cardCount} card${cardCount === 1 ? '' : 's'}? This cannot be undone.`
+      : `Delete empty column "${col?.name}"?`;
+    if (!window.confirm(msg)) return;
     try {
       await apiCall('/boards/' + list.id + '/columns/' + columnId, { method: 'DELETE' });
       loadBoard();
@@ -93,6 +109,55 @@ function BoardView({ list, onClose, apiCall, user }) {
     }
   };
 
+  const handleRenameColumn = async (columnId) => {
+    const trimmed = editingColumnName.trim();
+    if (!trimmed) {
+      setEditingColumnId(null);
+      setEditingColumnName('');
+      return;
+    }
+    // Skip the request if the name didn't actually change.
+    const col = columns.find(c => c.id === columnId);
+    if (col && col.name === trimmed) {
+      setEditingColumnId(null);
+      setEditingColumnName('');
+      return;
+    }
+    try {
+      const response = await apiCall('/boards/' + list.id + '/columns/' + columnId, {
+        method: 'PUT',
+        body: JSON.stringify({ name: trimmed }),
+      });
+      if (response.ok) {
+        setColumns(prev =>
+          prev.map(c => c.id === columnId ? { ...c, name: trimmed } : c)
+        );
+      }
+    } catch (err) {
+      console.error('Error renaming column:', err);
+    }
+    setEditingColumnId(null);
+    setEditingColumnName('');
+  };
+
+  const handleReorderColumns = async (newOrder) => {
+    setColumns(newOrder);
+    try {
+      const updatePromises = newOrder.map((col, index) =>
+        apiCall('/boards/' + list.id + '/columns/' + col.id, {
+          method: 'PUT',
+          body: JSON.stringify({ sortOrder: index + 1 }),
+        })
+      );
+      await Promise.all(updatePromises);
+    } catch (err) {
+      console.error('Error reordering columns:', err);
+      loadBoard();
+    }
+  };
+
+  // ── Card operations ──────────────────────────────────────────────────
+
   const handleAddCard = async (columnId) => {
     if (!newCardTitle.trim()) return;
     try {
@@ -109,6 +174,8 @@ function BoardView({ list, onClose, apiCall, user }) {
       console.error('Error creating card:', err);
     }
   };
+
+  // ── Helpers ──────────────────────────────────────────────────────────
 
   const getPriorityColor = (p) => {
     if (p <= 1) return 'var(--error)';
@@ -127,6 +194,8 @@ function BoardView({ list, onClose, apiCall, user }) {
     if (diff === 1) return { text: 'Tomorrow', color: 'var(--warning)' };
     return { text: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }), color: 'var(--text-secondary)' };
   };
+
+  // ── Render ───────────────────────────────────────────────────────────
 
   if (loading) {
     return (
@@ -155,6 +224,127 @@ function BoardView({ list, onClose, apiCall, user }) {
     );
   }
 
+  const renderColumn = (column) => (
+    <div className="board-column">
+      <div
+        className="board-column-header"
+        style={{ borderTopColor: column.color || 'var(--primary)' }}
+      >
+        <button
+          className="board-collapse-toggle"
+          onClick={() => handleToggleCollapse(column)}
+          title={column.collapsed ? 'Expand' : 'Collapse'}
+        >
+          {column.collapsed ? '▸' : '▾'}
+        </button>
+
+        {editingColumnId === column.id ? (
+          <input
+            className="board-column-rename-input"
+            type="text"
+            value={editingColumnName}
+            onChange={e => setEditingColumnName(e.target.value)}
+            onBlur={() => handleRenameColumn(column.id)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') handleRenameColumn(column.id);
+              if (e.key === 'Escape') { setEditingColumnId(null); setEditingColumnName(''); }
+            }}
+            autoFocus
+            onClick={e => e.stopPropagation()}
+          />
+        ) : (
+          <span
+            className={'board-column-name' + (isOwner ? ' editable' : '')}
+            onDoubleClick={() => {
+              if (!isOwner) return;
+              setEditingColumnId(column.id);
+              setEditingColumnName(column.name);
+            }}
+            title={isOwner ? 'Double-click to rename' : undefined}
+          >
+            {column.name}
+          </span>
+        )}
+
+        <span className="board-column-count">{(column.cards || []).length}</span>
+        {isOwner && (
+          <button
+            className="board-column-delete"
+            onClick={() => handleDeleteColumn(column.id)}
+            title="Delete column"
+          >
+            ×
+          </button>
+        )}
+      </div>
+
+      {!column.collapsed && (
+        <div className="board-column-cards">
+          {(column.cards || []).map(card => (
+            <div
+              key={card.id}
+              className="board-card"
+              onClick={() => setSelectedCard({ ...card, _columnName: column.name })}
+            >
+              <div className="board-card-title">{card.title}</div>
+              <div className="board-card-meta">
+                {card.priority && card.priority <= 5 && (
+                  <span
+                    className="board-card-priority"
+                    style={{ color: getPriorityColor(card.priority) }}
+                  >
+                    P{card.priority}
+                  </span>
+                )}
+                {card.due_date && (() => {
+                  const d = formatDate(card.due_date);
+                  return d ? <span style={{ color: d.color, fontSize: '0.75rem' }}>{d.text}</span> : null;
+                })()}
+                {card.assignee_pubkey && (
+                  <span className="board-card-assignee" title={card.assignee_pubkey}>
+                    👤
+                  </span>
+                )}
+              </div>
+            </div>
+          ))}
+
+          {canWrite && addingCardColumnId === column.id ? (
+            <form
+              className="board-add-card-form"
+              onSubmit={(e) => { e.preventDefault(); handleAddCard(column.id); }}
+            >
+              <input
+                type="text"
+                placeholder="Card title..."
+                value={newCardTitle}
+                onChange={e => setNewCardTitle(e.target.value)}
+                autoFocus
+              />
+              <div className="board-add-card-actions">
+                <button type="submit" className="btn btn-primary btn-small">Add</button>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-small"
+                  onClick={() => { setAddingCardColumnId(null); setNewCardTitle(''); }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          ) : canWrite && (
+            <button
+              className="board-add-card-btn"
+              onClick={() => { setAddingCardColumnId(column.id); setNewCardTitle(''); }}
+            >
+              + Add card
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="board-modal" onClick={e => e.stopPropagation()}>
@@ -164,14 +354,23 @@ function BoardView({ list, onClose, apiCall, user }) {
               className="list-icon"
               style={{ backgroundColor: list.color || 'var(--primary)' }}
             >
-              {list.icon || list.name.charAt(0).toUpperCase()}
+              {list.icon || boardName.charAt(0).toUpperCase()}
             </div>
             <div>
-              <h2>{list.name}</h2>
-              {list.description && <p>{list.description}</p>}
+              <h2>{boardName}</h2>
+              {boardDescription && <p>{boardDescription}</p>}
             </div>
           </div>
           <div className="board-header-actions">
+            {isOwner && (
+              <button
+                className="btn btn-secondary btn-small"
+                onClick={() => setShowEditBoard(true)}
+                title="Board settings"
+              >
+                ⚙
+              </button>
+            )}
             {isOwner && (
               <button
                 className="btn btn-secondary btn-small"
@@ -185,98 +384,22 @@ function BoardView({ list, onClose, apiCall, user }) {
         </div>
 
         <div className="board-container">
-          {columns.map(column => (
-            <div key={column.id} className="board-column">
-              <div
-                className="board-column-header"
-                style={{ borderTopColor: column.color || 'var(--primary)' }}
-              >
-                <button
-                  className="board-collapse-toggle"
-                  onClick={() => handleToggleCollapse(column)}
-                  title={column.collapsed ? 'Expand' : 'Collapse'}
-                >
-                  {column.collapsed ? '▸' : '▾'}
-                </button>
-                <span className="board-column-name">{column.name}</span>
-                <span className="board-column-count">{(column.cards || []).length}</span>
-                {isOwner && (
-                  <button
-                    className="board-column-delete"
-                    onClick={() => handleDeleteColumn(column.id)}
-                    title="Delete column"
-                  >
-                    ×
-                  </button>
-                )}
-              </div>
-
-              {!column.collapsed && (
-                <div className="board-column-cards">
-                  {(column.cards || []).map(card => (
-                    <div
-                      key={card.id}
-                      className="board-card"
-                      onClick={() => setSelectedCard({ ...card, _columnName: column.name })}
-                    >
-                      <div className="board-card-title">{card.title}</div>
-                      <div className="board-card-meta">
-                        {card.priority && card.priority <= 5 && (
-                          <span
-                            className="board-card-priority"
-                            style={{ color: getPriorityColor(card.priority) }}
-                          >
-                            P{card.priority}
-                          </span>
-                        )}
-                        {card.due_date && (() => {
-                          const d = formatDate(card.due_date);
-                          return d ? <span style={{ color: d.color, fontSize: '0.75rem' }}>{d.text}</span> : null;
-                        })()}
-                        {card.assignee_pubkey && (
-                          <span className="board-card-assignee" title={card.assignee_pubkey}>
-                            👤
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-
-                  {canWrite && addingCardColumnId === column.id ? (
-                    <form
-                      className="board-add-card-form"
-                      onSubmit={(e) => { e.preventDefault(); handleAddCard(column.id); }}
-                    >
-                      <input
-                        type="text"
-                        placeholder="Card title..."
-                        value={newCardTitle}
-                        onChange={e => setNewCardTitle(e.target.value)}
-                        autoFocus
-                      />
-                      <div className="board-add-card-actions">
-                        <button type="submit" className="btn btn-primary btn-small">Add</button>
-                        <button
-                          type="button"
-                          className="btn btn-secondary btn-small"
-                          onClick={() => { setAddingCardColumnId(null); setNewCardTitle(''); }}
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    </form>
-                  ) : canWrite && (
-                    <button
-                      className="board-add-card-btn"
-                      onClick={() => { setAddingCardColumnId(column.id); setNewCardTitle(''); }}
-                    >
-                      + Add card
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
-          ))}
+          {isOwner && columns.length > 1 ? (
+            <DragDropList
+              items={columns}
+              onReorder={handleReorderColumns}
+              itemKey="id"
+              isGrid={true}
+              className="board-columns-drag"
+              renderItem={renderColumn}
+            />
+          ) : (
+            columns.map(column => (
+              <React.Fragment key={column.id}>
+                {renderColumn(column)}
+              </React.Fragment>
+            ))
+          )}
 
           {addingColumn && (
             <div className="board-column board-column-new">
@@ -303,6 +426,23 @@ function BoardView({ list, onClose, apiCall, user }) {
           )}
         </div>
       </div>
+
+      {showEditBoard && (
+        <EditListModal
+          list={{ ...list, name: boardName, description: boardDescription }}
+          onClose={() => setShowEditBoard(false)}
+          onSave={(updatedList) => {
+            setBoardName(updatedList.name);
+            setBoardDescription(updatedList.description);
+            setShowEditBoard(false);
+          }}
+          onDelete={() => {
+            setShowEditBoard(false);
+            onClose();
+          }}
+          apiCall={apiCall}
+        />
+      )}
 
       {selectedCard && (
         <BoardCardModal

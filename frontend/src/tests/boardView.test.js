@@ -254,7 +254,9 @@ describe('add column form', () => {
 describe('board header', () => {
   test('shows board name in header', () => {
     expect(src).toContain('board-header');
-    expect(src).toMatch(/\{list\.name\}/);
+    // BoardView tracks the board name in local state (boardName) so it can
+    // update the display after a rename without re-fetching the parent.
+    expect(src).toMatch(/\{boardName\}/);
   });
 
   test('shows list icon with color', () => {

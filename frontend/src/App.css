@@ -1497,6 +1497,56 @@ body {
   text-overflow: ellipsis;
 }
 
+.board-column-name.editable {
+  cursor: text;
+  border-radius: 4px;
+  padding: 0.1rem 0.25rem;
+  margin: -0.1rem -0.25rem;
+}
+
+.board-column-name.editable:hover {
+  background: var(--border);
+}
+
+.board-column-rename-input {
+  font-weight: 600;
+  font-size: 0.95rem;
+  flex: 1;
+  min-width: 0;
+  padding: 0.15rem 0.35rem;
+  border: 1.5px solid var(--primary);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  outline: none;
+}
+
+/* DragDropList as horizontal board column container */
+.board-columns-drag {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+  min-width: min-content;
+}
+
+.board-columns-drag .drag-drop-item {
+  flex: 0 0 280px;
+  min-width: 280px;
+  max-width: 320px;
+}
+
+.board-columns-drag .drag-content {
+  height: 100%;
+}
+
+/* When columns are inside the drag wrapper, the inner .board-column
+   should fill the drag-drop-item rather than setting its own width. */
+.board-columns-drag .board-column {
+  min-width: unset;
+  max-width: unset;
+  flex: 1;
+}
+
 .board-column-count {
   font-size: 0.8rem;
   color: var(--text-secondary);
@@ -1847,6 +1897,11 @@ body {
   .board-column {
     min-width: 260px;
     flex: 0 0 260px;
+  }
+
+  .board-columns-drag .drag-drop-item {
+    flex: 0 0 260px;
+    min-width: 260px;
   }
 
   .board-card-field-row {
