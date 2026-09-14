@@ -39,11 +39,11 @@ const accessSrc = fs.readFileSync(path.resolve(__dirname, '../lib/access.js'), '
  * inner function bodies, so assertions like `.toContain('23505')` work even
  * for deeply nested checks.
  */
-function extractRouteBody(source, method, routePath) {
+function extractRouteBody(source, method, routePath, middleware = 'authenticateToken') {
   // Escape regex metacharacters in the path (none expected, but be safe).
   const escapedPath = routePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const startPattern = new RegExp(
-    `app\\.${method}\\(['"]${escapedPath}['"],\\s*authenticateToken`
+    `app\\.${method}\\(['"]${escapedPath}['"],\\s*${middleware}`
   );
   const match = source.match(startPattern);
   if (!match) return null;
@@ -453,5 +453,65 @@ describe('hasAccess permission hierarchy', () => {
 
   test('unknown level does not grant access', () => {
     expect(hasAccess('superadmin', 'owner')).toBe(false);
+  });
+});
+
+// ── 12. Public board route — boundary tests ─────────────────────────────
+//
+// The unauthenticated branch of GET /api/public/boards/:listId is the only
+// thing standing between imported cards (external_source IS NOT NULL) and
+// anonymous readers.  Every card the fleet mirror writes carries
+// external_source = 'coord', so this predicate is load-bearing.
+//
+// These tests pin the behaviour so a future refactor cannot quietly widen
+// the query.  Filed by cloistr-ops as a consumer of the board.
+
+describe('GET /api/public/boards/:listId — unauthenticated boundary', () => {
+  const body = extractRouteBody(serverSrc, 'get', '/api/public/boards/:listId', 'optionalAuth');
+
+  test('public board route is registered with optionalAuth middleware', () => {
+    expect(body).not.toBeNull();
+  });
+
+  test('unauthenticated branch excludes cards with non-null external_source', () => {
+    // The unauthenticated card query MUST contain this predicate.  Without it,
+    // every coord-mirrored card would be visible to anonymous readers the moment
+    // the board is toggled public.
+    expect(body).toContain('external_source IS NULL');
+  });
+
+  test('unauthenticated branch does NOT query card_comments', () => {
+    // Migration 013 comment: "a toggle should not retroactively publish every
+    // comment written while the board was private."  The public route must not
+    // SELECT from card_comments at all.
+    expect(body).not.toContain('card_comments');
+  });
+
+  test('unauthenticated branch only serves boards with visibility = public', () => {
+    // The query must filter by visibility = 'public' to prevent serving private
+    // boards to unauthenticated callers.
+    expect(body).toContain("visibility = 'public'");
+  });
+
+  test('authenticated branch still returns external_source cards (ADMISSION)', () => {
+    // The authenticated branch (req.user present, access resolved) must NOT
+    // filter by external_source — authenticated users with access see everything.
+    // We verify by finding the authenticated card query (which includes
+    // external_id and external_source columns in its SELECT) and confirming
+    // it does NOT contain the IS NULL filter.
+    //
+    // The handler has two parallel queries: the first (authenticated) returns
+    // external_id + external_source columns; the second (unauthenticated) omits
+    // them entirely and filters with IS NULL.  Both are in the same handler body.
+    //
+    // Find the authenticated branch: it selects external_id, external_source
+    // as columns (in the SELECT list, not a WHERE clause).
+    const firstExternalSelect = body.indexOf('external_id, external_source');
+    const externalIsNull = body.indexOf('external_source IS NULL');
+    // The unfiltered SELECT of external columns must appear BEFORE the filtered
+    // WHERE clause — authenticated branch first, unauthenticated second.
+    expect(firstExternalSelect).toBeGreaterThan(-1);
+    expect(externalIsNull).toBeGreaterThan(-1);
+    expect(firstExternalSelect).toBeLessThan(externalIsNull);
   });
 });
