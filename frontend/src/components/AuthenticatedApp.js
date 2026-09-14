@@ -149,15 +149,20 @@ function AuthenticatedApp() {
 
   const reorderLists = async (newListOrder) => {
     setLists(newListOrder);
-    
+
     try {
-      const updatePromises = newListOrder.map((list, index) => 
-        apiCall('/lists/' + list.id, {
+      // Only send sort-order updates for lists the user owns.  Shared lists
+      // appear in the grid but the PUT endpoint requires owner access; sending
+      // a PUT for a shared list returns 403 (not an auth failure, but it used
+      // to trigger a false logout before the apiCall fix).
+      const updatePromises = newListOrder.map((list, index) => {
+        if (isSharedList(list)) return Promise.resolve();
+        return apiCall('/lists/' + list.id, {
           method: 'PUT',
           body: JSON.stringify({ sortOrder: index + 1 })
-        })
-      );
-      
+        });
+      });
+
       await Promise.all(updatePromises);
     } catch (error) {
       console.error('Error updating list order:', error);

@@ -400,23 +400,39 @@ export const AuthProvider = ({ children }) => {
         headers
       });
 
-      // Handle 401/403 - try to refresh and retry
+      // Handle auth failures signalled by the server.
+      // IMPORTANT: only enter the refresh-and-retry flow when the server
+      // explicitly says `action: 'login_required'`.  A bare 403 from an
+      // endpoint (e.g. "Access denied" on a shared list the user doesn't
+      // own) is an application-level permission denial, NOT an expired
+      // token.  Treating it as auth failure caused a false logout whenever
+      // reorderLists sent a PUT for a shared list.
       if (response.status === 401 || response.status === 403) {
+        // Clone so we can return the original if this is not an auth issue.
+        const cloned = response.clone();
         const errorData = await response.json().catch(() => ({}));
 
-        if (errorData.action === 'login_required') {
+        if (errorData.action !== 'login_required') {
+          // Application-level 401/403 — return as-is for the caller.
+          return cloned;
+        }
+
+        // Genuine auth failure — try to refresh the token and retry once.
+        await refreshToken();
+
+        // Read the refreshed token from localStorage.  React state
+        // (getAuthHeaders) may still hold the pre-refresh value because
+        // setToken hasn't triggered a re-render yet.
+        const freshToken = localStorage.getItem('access_token');
+        if (!freshToken) {
           clearAuth();
           throw new Error('Session expired. Please log in again.');
         }
 
-        // Try refresh
-        await refreshToken();
-
-        // Retry with new token
         const newHeaders = {
           'Content-Type': 'application/json',
           ...options.headers,
-          ...getAuthHeaders()
+          'Authorization': `Bearer ${freshToken}`
         };
 
         response = await fetch(`${API_BASE}${url}`, {

@@ -37,7 +37,7 @@ function extractReorderLists(source) {
   const start = source.indexOf('const reorderLists');
   if (start === -1) return '';
   // Find the closing of the async arrow function (next top-level `const` or `};`)
-  const body = source.slice(start, start + 600);
+  const body = source.slice(start, start + 900);
   return body;
 }
 
