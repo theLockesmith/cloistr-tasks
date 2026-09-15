@@ -1389,7 +1389,7 @@ app.get('/api/boards/:listId', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'Board not found' });
     }
 
-    const [colResult, cardResult] = await Promise.all([
+    const [colResult, cardResult, tagResult, cardTagResult, checklistRollup] = await Promise.all([
       pool.query(`
         SELECT id, name, color, sort_order, collapsed
         FROM board_columns
@@ -1404,11 +1404,41 @@ app.get('/api/boards/:listId', authenticateToken, async (req, res) => {
         WHERE list_id = $1
         ORDER BY sort_order, id
       `, [listId]),
+      pool.query(`
+        SELECT id, name, color FROM board_tags WHERE list_id = $1 ORDER BY name
+      `, [listId]),
+      pool.query(`
+        SELECT bct.card_id, bt.id AS tag_id, bt.name, bt.color
+        FROM board_card_tags bct
+        JOIN board_tags bt ON bt.id = bct.tag_id
+        WHERE bt.list_id = $1
+      `, [listId]),
+      pool.query(`
+        SELECT card_id,
+               COUNT(*)::int AS total,
+               COUNT(*) FILTER (WHERE done)::int AS done
+        FROM card_checklist_items
+        WHERE card_id IN (SELECT id FROM board_cards WHERE list_id = $1)
+        GROUP BY card_id
+      `, [listId]),
     ]);
+
+    const tagsByCard = {};
+    for (const row of cardTagResult.rows) {
+      if (!tagsByCard[row.card_id]) tagsByCard[row.card_id] = [];
+      tagsByCard[row.card_id].push({ id: row.tag_id, name: row.name, color: row.color });
+    }
+
+    const checklistByCard = {};
+    for (const row of checklistRollup.rows) {
+      checklistByCard[row.card_id] = { done: row.done, total: row.total };
+    }
 
     // Group cards under their column for a single-call board reconstruction.
     const cardsByColumn = {};
     for (const card of cardResult.rows) {
+      card.tags = tagsByCard[card.id] || [];
+      card.checklist = checklistByCard[card.id] || null;
       if (!cardsByColumn[card.column_id]) cardsByColumn[card.column_id] = [];
       cardsByColumn[card.column_id].push(card);
     }
@@ -1418,7 +1448,7 @@ app.get('/api/boards/:listId', authenticateToken, async (req, res) => {
       cards: cardsByColumn[col.id] || [],
     }));
 
-    res.json({ columns, access });
+    res.json({ columns, access, tags: tagResult.rows });
   } catch (error) {
     console.error('Error fetching board:', error);
     res.status(500).json({ error: 'Failed to fetch board' });
@@ -1916,7 +1946,7 @@ app.get('/api/public/boards/:listId', optionalAuth, async (req, res) => {
           return res.status(404).json({ error: 'Board not found' });
         }
 
-        const [colResult, cardResult] = await Promise.all([
+        const [colResult, cardResult, tagResult, cardTagResult, checklistRollup] = await Promise.all([
           pool.query(`
             SELECT id, name, color, sort_order, collapsed
             FROM board_columns WHERE list_id = $1 ORDER BY sort_order, id
@@ -1927,15 +1957,43 @@ app.get('/api/public/boards/:listId', optionalAuth, async (req, res) => {
                    external_id, external_source, created_at, updated_at
             FROM board_cards WHERE list_id = $1 ORDER BY sort_order, id
           `, [listId]),
+          pool.query(`
+            SELECT id, name, color FROM board_tags WHERE list_id = $1 ORDER BY name
+          `, [listId]),
+          pool.query(`
+            SELECT bct.card_id, bt.id AS tag_id, bt.name, bt.color
+            FROM board_card_tags bct
+            JOIN board_tags bt ON bt.id = bct.tag_id
+            WHERE bt.list_id = $1
+          `, [listId]),
+          pool.query(`
+            SELECT card_id, COUNT(*)::int AS total, COUNT(*) FILTER (WHERE done)::int AS done
+            FROM card_checklist_items
+            WHERE card_id IN (SELECT id FROM board_cards WHERE list_id = $1)
+            GROUP BY card_id
+          `, [listId]),
         ]);
+
+        const tagsByCard = {};
+        for (const row of cardTagResult.rows) {
+          if (!tagsByCard[row.card_id]) tagsByCard[row.card_id] = [];
+          tagsByCard[row.card_id].push({ id: row.tag_id, name: row.name, color: row.color });
+        }
+
+        const checklistByCard = {};
+        for (const row of checklistRollup.rows) {
+          checklistByCard[row.card_id] = { done: row.done, total: row.total };
+        }
 
         const cardsByColumn = {};
         for (const card of cardResult.rows) {
+          card.tags = tagsByCard[card.id] || [];
+          card.checklist = checklistByCard[card.id] || null;
           if (!cardsByColumn[card.column_id]) cardsByColumn[card.column_id] = [];
           cardsByColumn[card.column_id].push(card);
         }
         const columns = colResult.rows.map(col => ({ ...col, cards: cardsByColumn[col.id] || [] }));
-        return res.json({ columns, access, visibility: boardRow.rows[0].visibility });
+        return res.json({ columns, access, visibility: boardRow.rows[0].visibility, tags: tagResult.rows });
       }
     }
 
@@ -1946,7 +2004,7 @@ app.get('/api/public/boards/:listId', optionalAuth, async (req, res) => {
     );
     if (boardCheck.rows.length === 0) return res.status(404).json({ error: 'Board not found' });
 
-    const [colResult, cardResult] = await Promise.all([
+    const [colResult, cardResult, tagResult, cardTagResult, checklistRollup] = await Promise.all([
       pool.query(`
         SELECT id, name, color, sort_order, collapsed
         FROM board_columns WHERE list_id = $1 ORDER BY sort_order, id
@@ -1962,19 +2020,294 @@ app.get('/api/public/boards/:listId', optionalAuth, async (req, res) => {
         WHERE list_id = $1 AND external_source IS NULL
         ORDER BY sort_order, id
       `, [listId]),
+      pool.query(`
+        SELECT id, name, color FROM board_tags WHERE list_id = $1 ORDER BY name
+      `, [listId]),
+      pool.query(`
+        SELECT bct.card_id, bt.id AS tag_id, bt.name, bt.color
+        FROM board_card_tags bct
+        JOIN board_tags bt ON bt.id = bct.tag_id
+        WHERE bt.list_id = $1
+      `, [listId]),
+      pool.query(`
+        SELECT card_id, COUNT(*)::int AS total, COUNT(*) FILTER (WHERE done)::int AS done
+        FROM card_checklist_items
+        WHERE card_id IN (SELECT id FROM board_cards WHERE list_id = $1)
+        GROUP BY card_id
+      `, [listId]),
     ]);
+
+    const tagsByCard = {};
+    for (const row of cardTagResult.rows) {
+      if (!tagsByCard[row.card_id]) tagsByCard[row.card_id] = [];
+      tagsByCard[row.card_id].push({ id: row.tag_id, name: row.name, color: row.color });
+    }
+
+    const checklistByCard = {};
+    for (const row of checklistRollup.rows) {
+      checklistByCard[row.card_id] = { done: row.done, total: row.total };
+    }
 
     const cardsByColumn = {};
     for (const card of cardResult.rows) {
+      card.tags = tagsByCard[card.id] || [];
+      card.checklist = checklistByCard[card.id] || null;
       if (!cardsByColumn[card.column_id]) cardsByColumn[card.column_id] = [];
       cardsByColumn[card.column_id].push(card);
     }
     const columns = colResult.rows.map(col => ({ ...col, cards: cardsByColumn[col.id] || [] }));
 
-    res.json({ columns, access: 'public', visibility: 'public', board: boardCheck.rows[0] });
+    res.json({ columns, access: 'public', visibility: 'public', board: boardCheck.rows[0], tags: tagResult.rows });
   } catch (error) {
     console.error('Error fetching public board:', error);
     res.status(500).json({ error: 'Failed to fetch public board' });
+  }
+});
+
+// ── Board tags (admin creates/edits/deletes; write attaches/detaches) ────
+
+app.get('/api/boards/:listId/tags', authenticateToken, async (req, res) => {
+  try {
+    const { listId } = req.params;
+    const access = await listAccess(pool, listId, req.user.id);
+    if (!access) return res.status(404).json({ error: 'Board not found' });
+
+    const result = await pool.query(
+      'SELECT id, name, color, created_at FROM board_tags WHERE list_id = $1 ORDER BY name',
+      [listId],
+    );
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching board tags:', error);
+    res.status(500).json({ error: 'Failed to fetch board tags' });
+  }
+});
+
+app.post('/api/boards/:listId/tags', authenticateToken, async (req, res) => {
+  try {
+    const { listId } = req.params;
+    const access = await listAccess(pool, listId, req.user.id);
+    if (!access) return res.status(404).json({ error: 'Board not found' });
+    if (!hasAccess(access, 'admin')) return res.status(403).json({ error: 'Admin access required' });
+
+    const { name, color } = req.body;
+    if (!name || !name.trim()) return res.status(400).json({ error: 'Tag name is required' });
+
+    const result = await pool.query(
+      'INSERT INTO board_tags (list_id, name, color) VALUES ($1, $2, $3) RETURNING *',
+      [listId, name.trim(), color || '#6b7280'],
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    if (error.code === '23505') {
+      return res.status(409).json({ error: 'A tag with that name already exists on this board' });
+    }
+    console.error('Error creating board tag:', error);
+    res.status(500).json({ error: 'Failed to create board tag' });
+  }
+});
+
+app.put('/api/boards/:listId/tags/:tagId', authenticateToken, async (req, res) => {
+  try {
+    const { listId, tagId } = req.params;
+    const access = await listAccess(pool, listId, req.user.id);
+    if (!access) return res.status(404).json({ error: 'Board not found' });
+    if (!hasAccess(access, 'admin')) return res.status(403).json({ error: 'Admin access required' });
+
+    const { name, color } = req.body;
+    const result = await pool.query(
+      `UPDATE board_tags
+       SET name = COALESCE($1, name), color = COALESCE($2, color)
+       WHERE id = $3 AND list_id = $4
+       RETURNING *`,
+      [name ? name.trim() : null, color || null, tagId, listId],
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Tag not found' });
+    res.json(result.rows[0]);
+  } catch (error) {
+    if (error.code === '23505') {
+      return res.status(409).json({ error: 'A tag with that name already exists on this board' });
+    }
+    console.error('Error updating board tag:', error);
+    res.status(500).json({ error: 'Failed to update board tag' });
+  }
+});
+
+app.delete('/api/boards/:listId/tags/:tagId', authenticateToken, async (req, res) => {
+  try {
+    const { listId, tagId } = req.params;
+    const access = await listAccess(pool, listId, req.user.id);
+    if (!access) return res.status(404).json({ error: 'Board not found' });
+    if (!hasAccess(access, 'admin')) return res.status(403).json({ error: 'Admin access required' });
+
+    const result = await pool.query(
+      'DELETE FROM board_tags WHERE id = $1 AND list_id = $2 RETURNING id',
+      [tagId, listId],
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Tag not found' });
+    res.json({ deleted: true });
+  } catch (error) {
+    console.error('Error deleting board tag:', error);
+    res.status(500).json({ error: 'Failed to delete board tag' });
+  }
+});
+
+app.post('/api/boards/:listId/cards/:cardId/tags', authenticateToken, async (req, res) => {
+  try {
+    const { listId, cardId } = req.params;
+    const { access } = await cardAccess(pool, cardId, req.user.id);
+    if (!access) return res.status(404).json({ error: 'Card not found' });
+    if (!hasAccess(access, 'write')) return res.status(403).json({ error: 'Write access required' });
+
+    const { tagId } = req.body;
+    if (!tagId) return res.status(400).json({ error: 'tagId is required' });
+
+    // Verify tag belongs to this board
+    const tagCheck = await pool.query(
+      'SELECT id FROM board_tags WHERE id = $1 AND list_id = $2',
+      [tagId, listId],
+    );
+    if (tagCheck.rows.length === 0) return res.status(404).json({ error: 'Tag not found on this board' });
+
+    await pool.query(
+      'INSERT INTO board_card_tags (card_id, tag_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+      [cardId, tagId],
+    );
+    res.status(201).json({ cardId: Number(cardId), tagId: Number(tagId) });
+  } catch (error) {
+    console.error('Error attaching tag to card:', error);
+    res.status(500).json({ error: 'Failed to attach tag' });
+  }
+});
+
+app.delete('/api/boards/:listId/cards/:cardId/tags/:tagId', authenticateToken, async (req, res) => {
+  try {
+    const { listId, cardId, tagId } = req.params;
+    const { access } = await cardAccess(pool, cardId, req.user.id);
+    if (!access) return res.status(404).json({ error: 'Card not found' });
+    if (!hasAccess(access, 'write')) return res.status(403).json({ error: 'Write access required' });
+
+    await pool.query(
+      'DELETE FROM board_card_tags WHERE card_id = $1 AND tag_id = $2',
+      [cardId, tagId],
+    );
+    res.json({ deleted: true });
+  } catch (error) {
+    console.error('Error detaching tag from card:', error);
+    res.status(500).json({ error: 'Failed to detach tag' });
+  }
+});
+
+// ── Checklist item routes ──────────────────────────────────────────────
+
+app.get('/api/boards/:listId/cards/:cardId/checklist', authenticateToken, async (req, res) => {
+  try {
+    const { cardId } = req.params;
+    const { access } = await cardAccess(pool, cardId, req.user.id);
+    if (!access) return res.status(404).json({ error: 'Card not found' });
+    if (!hasAccess(access, 'read')) return res.status(403).json({ error: 'Read access required' });
+
+    const result = await pool.query(
+      'SELECT id, text, done, sort_order FROM card_checklist_items WHERE card_id = $1 ORDER BY sort_order, id',
+      [cardId],
+    );
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching checklist:', error);
+    res.status(500).json({ error: 'Failed to fetch checklist' });
+  }
+});
+
+app.post('/api/boards/:listId/cards/:cardId/checklist', authenticateToken, async (req, res) => {
+  try {
+    const { cardId } = req.params;
+    const { access } = await cardAccess(pool, cardId, req.user.id);
+    if (!access) return res.status(404).json({ error: 'Card not found' });
+    if (!hasAccess(access, 'write')) return res.status(403).json({ error: 'Write access required' });
+
+    const { text } = req.body;
+    if (!text || !text.trim()) return res.status(400).json({ error: 'Text is required' });
+
+    const maxOrder = await pool.query(
+      'SELECT COALESCE(MAX(sort_order), 0) AS max FROM card_checklist_items WHERE card_id = $1',
+      [cardId],
+    );
+    const result = await pool.query(
+      'INSERT INTO card_checklist_items (card_id, text, sort_order) VALUES ($1, $2, $3) RETURNING id, text, done, sort_order',
+      [cardId, text.trim(), maxOrder.rows[0].max + 1],
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    console.error('Error creating checklist item:', error);
+    res.status(500).json({ error: 'Failed to create checklist item' });
+  }
+});
+
+app.put('/api/boards/:listId/cards/:cardId/checklist/:itemId', authenticateToken, async (req, res) => {
+  try {
+    const { cardId, itemId } = req.params;
+    const { access } = await cardAccess(pool, cardId, req.user.id);
+    if (!access) return res.status(404).json({ error: 'Card not found' });
+    if (!hasAccess(access, 'write')) return res.status(403).json({ error: 'Write access required' });
+
+    const { text, done, sortOrder } = req.body;
+    const result = await pool.query(
+      `UPDATE card_checklist_items
+       SET text = COALESCE($1, text),
+           done = COALESCE($2, done),
+           sort_order = COALESCE($3, sort_order)
+       WHERE id = $4 AND card_id = $5
+       RETURNING id, text, done, sort_order`,
+      [text !== undefined ? text.trim() : null, done !== undefined ? done : null, sortOrder !== undefined ? sortOrder : null, itemId, cardId],
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Checklist item not found' });
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error updating checklist item:', error);
+    res.status(500).json({ error: 'Failed to update checklist item' });
+  }
+});
+
+app.delete('/api/boards/:listId/cards/:cardId/checklist/:itemId', authenticateToken, async (req, res) => {
+  try {
+    const { cardId, itemId } = req.params;
+    const { access } = await cardAccess(pool, cardId, req.user.id);
+    if (!access) return res.status(404).json({ error: 'Card not found' });
+    if (!hasAccess(access, 'write')) return res.status(403).json({ error: 'Write access required' });
+
+    const result = await pool.query(
+      'DELETE FROM card_checklist_items WHERE id = $1 AND card_id = $2 RETURNING id',
+      [itemId, cardId],
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Checklist item not found' });
+    res.json({ deleted: true });
+  } catch (error) {
+    console.error('Error deleting checklist item:', error);
+    res.status(500).json({ error: 'Failed to delete checklist item' });
+  }
+});
+
+app.put('/api/boards/:listId/cards/:cardId/checklist-reorder', authenticateToken, async (req, res) => {
+  try {
+    const { cardId } = req.params;
+    const { access } = await cardAccess(pool, cardId, req.user.id);
+    if (!access) return res.status(404).json({ error: 'Card not found' });
+    if (!hasAccess(access, 'write')) return res.status(403).json({ error: 'Write access required' });
+
+    const { order } = req.body;
+    if (!Array.isArray(order)) return res.status(400).json({ error: 'order must be an array of item ids' });
+
+    const updates = order.map((itemId, idx) =>
+      pool.query(
+        'UPDATE card_checklist_items SET sort_order = $1 WHERE id = $2 AND card_id = $3',
+        [idx + 1, itemId, cardId],
+      )
+    );
+    await Promise.all(updates);
+    res.json({ reordered: true });
+  } catch (error) {
+    console.error('Error reordering checklist:', error);
+    res.status(500).json({ error: 'Failed to reorder checklist' });
   }
 });
 

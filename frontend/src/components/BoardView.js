@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import ReactDOM from 'react-dom';
 import BoardCardModal from './BoardCardModal';
 import { useCardContextMenu, CardContextMenu } from './CardContextMenu';
@@ -23,7 +23,52 @@ function BoardView({ list, onClose, apiCall, user }) {
   const [boardDescription, setBoardDescription] = useState(list.description);
   const [dropTargetColumnId, setDropTargetColumnId] = useState(null);
   const [contextCard, setContextCard] = useState(null);
+  const [boardTags, setBoardTags] = useState([]);
   const cardMenu = useCardContextMenu();
+
+  // Filter state, synced to URL query string so filtered views are shareable.
+  const params = new URLSearchParams(window.location.search);
+  const [filterText, setFilterText] = useState(params.get('q') || '');
+  const [filterAssignee, setFilterAssignee] = useState(params.get('assignee') || '');
+  const [filterOpener, setFilterOpener] = useState(params.get('opener') || '');
+  const [filterTags, setFilterTags] = useState(() => {
+    const t = params.get('tags');
+    return t ? t.split(',').map(Number).filter(Boolean) : [];
+  });
+
+  const syncFiltersToUrl = useCallback((text, assignee, opener, tags) => {
+    const p = new URLSearchParams(window.location.search);
+    if (text) p.set('q', text); else p.delete('q');
+    if (assignee) p.set('assignee', assignee); else p.delete('assignee');
+    if (opener) p.set('opener', opener); else p.delete('opener');
+    if (tags.length) p.set('tags', tags.join(',')); else p.delete('tags');
+    const qs = p.toString();
+    const newUrl = window.location.pathname + (qs ? '?' + qs : '');
+    window.history.replaceState(null, '', newUrl);
+  }, []);
+
+  const isFiltering = filterText || filterAssignee || filterOpener || filterTags.length > 0;
+
+  const matchesFilter = useCallback((card) => {
+    if (filterText && !card.title.toLowerCase().includes(filterText.toLowerCase())) return false;
+    if (filterAssignee === '_unassigned') {
+      if (card.assignee_pubkey) return false;
+    } else if (filterAssignee && card.assignee_pubkey !== filterAssignee) {
+      return false;
+    }
+    if (filterOpener && card.author_pubkey !== filterOpener) return false;
+    if (filterTags.length > 0) {
+      const cardTagIds = (card.tags || []).map(t => t.id);
+      if (!filterTags.every(tid => cardTagIds.includes(tid))) return false;
+    }
+    return true;
+  }, [filterText, filterAssignee, filterOpener, filterTags]);
+
+  const truncatePubkey = (pk) => pk ? pk.slice(0, 8) + '...' : '';
+
+  const allCards = useMemo(() => columns.flatMap(c => c.cards || []), [columns]);
+  const uniqueAssignees = useMemo(() => [...new Set(allCards.map(c => c.assignee_pubkey).filter(Boolean))], [allCards]);
+  const uniqueOpeners = useMemo(() => [...new Set(allCards.map(c => c.author_pubkey).filter(Boolean))], [allCards]);
 
   const loadBoard = useCallback(async () => {
     try {
@@ -32,6 +77,7 @@ function BoardView({ list, onClose, apiCall, user }) {
         const data = await response.json();
         setColumns(data.columns);
         setAccess(data.access);
+        setBoardTags(data.tags || []);
       } else {
         setError('Failed to load board');
       }
@@ -313,7 +359,7 @@ function BoardView({ list, onClose, apiCall, user }) {
 
       {!column.collapsed && (
         <div className="board-column-cards">
-          {(column.cards || []).map(card => (
+          {(column.cards || []).filter(matchesFilter).map(card => (
             <div
               key={card.id}
               className="board-card"
@@ -348,6 +394,24 @@ function BoardView({ list, onClose, apiCall, user }) {
                   </span>
                 )}
               </div>
+              {card.checklist && (
+                <span className="board-card-checklist-badge">
+                  {card.checklist.done}/{card.checklist.total}
+                </span>
+              )}
+              {card.tags && card.tags.length > 0 && (
+                <div className="board-card-tags">
+                  {card.tags.map(tag => (
+                    <span
+                      key={tag.id}
+                      className="board-card-tag-pill"
+                      style={{ backgroundColor: tag.color || '#6b7280' }}
+                    >
+                      {tag.name}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
           ))}
 
@@ -424,6 +488,101 @@ function BoardView({ list, onClose, apiCall, user }) {
               )}
               <button onClick={onClose} className="btn btn-primary btn-small">Close</button>
             </div>
+          </div>
+
+          <div className="board-filter-bar">
+            <input
+              className="board-filter-text"
+              type="text"
+              placeholder="Search cards..."
+              value={filterText}
+              onChange={e => {
+                setFilterText(e.target.value);
+                syncFiltersToUrl(e.target.value, filterAssignee, filterOpener, filterTags);
+              }}
+            />
+            <select
+              className="board-filter-assignee"
+              value={filterAssignee}
+              onChange={e => {
+                setFilterAssignee(e.target.value);
+                syncFiltersToUrl(filterText, e.target.value, filterOpener, filterTags);
+              }}
+            >
+              <option value="">All assignees</option>
+              <option value="_unassigned">Unassigned</option>
+              {uniqueAssignees.map(pk => (
+                <option key={pk} value={pk}>{truncatePubkey(pk)}</option>
+              ))}
+            </select>
+            <select
+              className="board-filter-opener"
+              value={filterOpener}
+              onChange={e => {
+                setFilterOpener(e.target.value);
+                syncFiltersToUrl(filterText, filterAssignee, e.target.value, filterTags);
+              }}
+            >
+              <option value="">All openers</option>
+              {uniqueOpeners.map(pk => (
+                <option key={pk} value={pk}>{truncatePubkey(pk)}</option>
+              ))}
+            </select>
+            {(boardTags || []).length > 0 && (
+              <select
+                className="board-filter-tag"
+                value=""
+                onChange={e => {
+                  const tid = Number(e.target.value);
+                  if (tid && !filterTags.includes(tid)) {
+                    const next = [...filterTags, tid];
+                    setFilterTags(next);
+                    syncFiltersToUrl(filterText, filterAssignee, filterOpener, next);
+                  }
+                }}
+              >
+                <option value="">Add tag filter...</option>
+                {(boardTags || []).filter(t => !filterTags.includes(t.id)).map(t => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
+              </select>
+            )}
+            {filterTags.length > 0 && (
+              <div className="board-filter-active-tags">
+                {filterTags.map(tid => {
+                  const tag = (boardTags || []).find(t => t.id === tid);
+                  return tag ? (
+                    <span key={tid} className="board-card-tag-pill" style={{ backgroundColor: tag.color || '#6b7280' }}>
+                      {tag.name}
+                      <button
+                        className="board-card-tag-remove"
+                        onClick={() => {
+                          const next = filterTags.filter(id => id !== tid);
+                          setFilterTags(next);
+                          syncFiltersToUrl(filterText, filterAssignee, filterOpener, next);
+                        }}
+                      >
+                        x
+                      </button>
+                    </span>
+                  ) : null;
+                })}
+              </div>
+            )}
+            {isFiltering && (
+              <button
+                className="btn btn-secondary btn-small board-filter-clear"
+                onClick={() => {
+                  setFilterText('');
+                  setFilterAssignee('');
+                  setFilterOpener('');
+                  setFilterTags([]);
+                  syncFiltersToUrl('', '', '', []);
+                }}
+              >
+                Clear
+              </button>
+            )}
           </div>
 
           <div className="board-container">
@@ -536,6 +695,7 @@ function BoardView({ list, onClose, apiCall, user }) {
           columns={columns}
           listId={list.id}
           access={access}
+          boardTags={boardTags}
           apiCall={apiCall}
           user={user}
           onClose={() => setSelectedCard(null)}

@@ -120,7 +120,7 @@ describe('column rendering', () => {
 
 describe('card rendering', () => {
   test('maps over column.cards array', () => {
-    expect(src).toMatch(/\(column\.cards\s*\|\|\s*\[\]\)\.map\(\s*card\s*=>/);
+    expect(src).toMatch(/\(column\.cards\s*\|\|\s*\[\]\)(?:\.filter\([^)]*\))?\.map\(\s*card\s*=>/);
   });
 
   test('card click opens detail modal via setSelectedCard', () => {
@@ -257,5 +257,117 @@ describe('board header', () => {
 
   test('has close button', () => {
     expect(src).toMatch(/onClick=\{onClose\}[\s\S]*?Close/);
+  });
+});
+
+// ── Board tags ─────────────────────────────────────────────────────────
+
+describe('board tags', () => {
+  test('tracks boardTags state', () => {
+    expect(src).toContain('boardTags');
+    expect(src).toContain('setBoardTags');
+  });
+
+  test('loads tags from board API response', () => {
+    expect(src).toContain('data.tags');
+  });
+
+  test('renders tag pills on cards', () => {
+    expect(src).toContain('board-card-tags');
+    expect(src).toContain('board-card-tag-pill');
+  });
+
+  test('passes boardTags to BoardCardModal', () => {
+    const modalSection = src.slice(
+      src.indexOf('<BoardCardModal'),
+      src.indexOf('<BoardCardModal') + 500,
+    );
+    expect(modalSection).toContain('boardTags={boardTags}');
+  });
+});
+
+// ── Client-side card filters ──────────────────────────────────────────
+
+describe('card filters', () => {
+  test('filter state initialized from URL search params', () => {
+    expect(src).toContain("new URLSearchParams(window.location.search)");
+    expect(src).toContain("params.get('q')");
+    expect(src).toContain("params.get('assignee')");
+    expect(src).toContain("params.get('opener')");
+    expect(src).toContain("params.get('tags')");
+  });
+
+  test('syncFiltersToUrl writes filter state to URL via replaceState', () => {
+    expect(src).toContain('syncFiltersToUrl');
+    expect(src).toContain('window.history.replaceState');
+  });
+
+  test('matchesFilter checks text, assignee, opener, and tags', () => {
+    expect(src).toContain('matchesFilter');
+    expect(src).toMatch(/card\.title\.toLowerCase\(\)\.includes\(filterText/);
+    expect(src).toContain('filterAssignee');
+    expect(src).toContain('filterOpener');
+    expect(src).toContain('filterTags');
+  });
+
+  test('cards are filtered before rendering', () => {
+    expect(src).toMatch(/\.filter\(matchesFilter\)\.map\(\s*card/);
+  });
+
+  test('unassigned is a selectable assignee value', () => {
+    expect(src).toContain("'_unassigned'");
+    expect(src).toContain('Unassigned');
+  });
+
+  test('filter bar renders between header and container', () => {
+    const headerEnd = src.indexOf('board-header-actions');
+    const filterBar = src.indexOf('board-filter-bar');
+    const container = src.indexOf('board-container');
+    expect(filterBar).toBeGreaterThan(headerEnd);
+    expect(filterBar).toBeLessThan(container);
+  });
+
+  test('filter bar has text input, assignee select, opener select', () => {
+    expect(src).toContain('board-filter-text');
+    expect(src).toContain('board-filter-assignee');
+    expect(src).toContain('board-filter-opener');
+    expect(src).toContain('Search cards...');
+    expect(src).toContain('All assignees');
+    expect(src).toContain('All openers');
+  });
+
+  test('tag filter uses select dropdown to add tags', () => {
+    expect(src).toContain('board-filter-tag');
+    expect(src).toContain('Add tag filter...');
+  });
+
+  test('clear button appears when filtering', () => {
+    expect(src).toContain('board-filter-clear');
+    expect(src).toContain('isFiltering');
+    expect(src).toContain('Clear');
+  });
+
+  test('isFiltering derived from any active filter', () => {
+    expect(src).toMatch(/isFiltering\s*=\s*filterText\s*\|\|\s*filterAssignee\s*\|\|\s*filterOpener\s*\|\|\s*filterTags\.length/);
+  });
+
+  test('unique assignees and openers are memoized from all cards', () => {
+    expect(src).toContain('uniqueAssignees');
+    expect(src).toContain('uniqueOpeners');
+    expect(src).toMatch(/useMemo\(\(\)\s*=>\s*columns\.flatMap/);
+  });
+});
+
+// ── Checklist rollup on card face ─────────────────────────────────────
+
+describe('checklist rollup', () => {
+  test('shows checklist progress badge on cards', () => {
+    expect(src).toContain('board-card-checklist-badge');
+    expect(src).toContain('card.checklist');
+  });
+
+  test('badge shows done/total counts', () => {
+    expect(src).toContain('card.checklist.done');
+    expect(src).toContain('card.checklist.total');
   });
 });

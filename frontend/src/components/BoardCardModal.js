@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import renderMarkdown from '../lib/renderMarkdown';
 
-function BoardCardModal({ card, columns, listId, access, apiCall, user, onClose, onCardUpdated }) {
+function BoardCardModal({ card, columns, listId, access, boardTags, apiCall, user, onClose, onCardUpdated }) {
   const [title, setTitle] = useState(card.title);
   const [description, setDescription] = useState(card.description || '');
   const [priority, setPriority] = useState(card.priority || 3);
   const [dueDate, setDueDate] = useState(card.due_date ? card.due_date.split('T')[0] : '');
   const [assigneePubkey, setAssigneePubkey] = useState(card.assignee_pubkey || '');
+  const [cardTags, setCardTags] = useState(card.tags || []);
   const [comments, setComments] = useState([]);
   const [newComment, setNewComment] = useState('');
   const [editingCommentId, setEditingCommentId] = useState(null);
@@ -13,9 +15,26 @@ function BoardCardModal({ card, columns, listId, access, apiCall, user, onClose,
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
+  const [expandedCommentId, setExpandedCommentId] = useState(null);
+  const [showManageTags, setShowManageTags] = useState(false);
+  const [newTagName, setNewTagName] = useState('');
+  const [newTagColor, setNewTagColor] = useState('#6b7280');
+  const [checklistItems, setChecklistItems] = useState([]);
+  const [newChecklistText, setNewChecklistText] = useState('');
 
   const canWrite = access === 'owner' || access === 'admin' || access === 'write';
   const canAdmin = access === 'owner' || access === 'admin';
+
+  const loadChecklist = useCallback(async () => {
+    try {
+      const response = await apiCall('/boards/' + listId + '/cards/' + card.id + '/checklist');
+      if (response.ok) {
+        setChecklistItems(await response.json());
+      }
+    } catch (err) {
+      console.error('Error loading checklist:', err);
+    }
+  }, [apiCall, listId, card.id]);
 
   const loadComments = useCallback(async () => {
     try {
@@ -30,19 +49,21 @@ function BoardCardModal({ card, columns, listId, access, apiCall, user, onClose,
 
   useEffect(() => {
     loadComments();
-  }, [loadComments]);
+    loadChecklist();
+  }, [loadComments, loadChecklist]);
 
   useEffect(() => {
     const handleKeyDown = (e) => {
       if (e.key === 'Escape') {
-        if (descriptionExpanded) setDescriptionExpanded(false);
+        if (expandedCommentId) setExpandedCommentId(null);
+        else if (descriptionExpanded) setDescriptionExpanded(false);
         else if (editingCommentId) { setEditingCommentId(null); setEditingCommentBody(''); }
         else onClose();
       }
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [onClose, editingCommentId, descriptionExpanded]);
+  }, [onClose, editingCommentId, descriptionExpanded, expandedCommentId]);
 
   const handleSave = async () => {
     if (!dirty) return;
@@ -136,6 +157,100 @@ function BoardCardModal({ card, columns, listId, access, apiCall, user, onClose,
     }
   };
 
+  const handleAttachTag = async (tagId) => {
+    try {
+      const response = await apiCall('/boards/' + listId + '/cards/' + card.id + '/tags', {
+        method: 'POST',
+        body: JSON.stringify({ tagId }),
+      });
+      if (response.ok) {
+        const tag = (boardTags || []).find(t => t.id === tagId);
+        if (tag) setCardTags(prev => [...prev, tag]);
+      }
+    } catch (err) {
+      console.error('Error attaching tag:', err);
+    }
+  };
+
+  const handleDetachTag = async (tagId) => {
+    try {
+      await apiCall('/boards/' + listId + '/cards/' + card.id + '/tags/' + tagId, {
+        method: 'DELETE',
+      });
+      setCardTags(prev => prev.filter(t => t.id !== tagId));
+    } catch (err) {
+      console.error('Error detaching tag:', err);
+    }
+  };
+
+  const handleCreateTag = async (e) => {
+    e.preventDefault();
+    if (!newTagName.trim()) return;
+    try {
+      const response = await apiCall('/boards/' + listId + '/tags', {
+        method: 'POST',
+        body: JSON.stringify({ name: newTagName.trim(), color: newTagColor }),
+      });
+      if (response.ok) {
+        setNewTagName('');
+        setNewTagColor('#6b7280');
+      }
+    } catch (err) {
+      console.error('Error creating tag:', err);
+    }
+  };
+
+  const handleDeleteTag = async (tagId) => {
+    try {
+      await apiCall('/boards/' + listId + '/tags/' + tagId, { method: 'DELETE' });
+      setCardTags(prev => prev.filter(t => t.id !== tagId));
+    } catch (err) {
+      console.error('Error deleting tag:', err);
+    }
+  };
+
+  const handleAddChecklistItem = async (e) => {
+    e.preventDefault();
+    if (!newChecklistText.trim()) return;
+    try {
+      const response = await apiCall('/boards/' + listId + '/cards/' + card.id + '/checklist', {
+        method: 'POST',
+        body: JSON.stringify({ text: newChecklistText.trim() }),
+      });
+      if (response.ok) {
+        const item = await response.json();
+        setChecklistItems(prev => [...prev, item]);
+        setNewChecklistText('');
+      }
+    } catch (err) {
+      console.error('Error creating checklist item:', err);
+    }
+  };
+
+  const handleToggleChecklistItem = async (itemId, done) => {
+    try {
+      const response = await apiCall('/boards/' + listId + '/cards/' + card.id + '/checklist/' + itemId, {
+        method: 'PUT',
+        body: JSON.stringify({ done: !done }),
+      });
+      if (response.ok) {
+        const updated = await response.json();
+        setChecklistItems(prev => prev.map(i => i.id === itemId ? updated : i));
+      }
+    } catch (err) {
+      console.error('Error toggling checklist item:', err);
+    }
+  };
+
+  const handleDeleteChecklistItem = async (itemId) => {
+    try {
+      await apiCall('/boards/' + listId + '/cards/' + card.id + '/checklist/' + itemId, { method: 'DELETE' });
+      setChecklistItems(prev => prev.filter(i => i.id !== itemId));
+    } catch (err) {
+      console.error('Error deleting checklist item:', err);
+    }
+  };
+
   const truncatePubkey = (pk) => {
     if (!pk || pk.length < 12) return pk || 'Unknown';
     return pk.slice(0, 6) + '...' + pk.slice(-4);
@@ -218,14 +333,13 @@ function BoardCardModal({ card, columns, listId, access, apiCall, user, onClose,
                 />
               )
             ) : (
-              <p
-                className="board-card-desc-ro"
+              <div
+                className="board-card-desc-ro md-rendered"
                 onClick={() => { if (description) setDescriptionExpanded(true); }}
                 style={{ cursor: description ? 'pointer' : 'default' }}
                 title={description ? 'Click to expand' : undefined}
-              >
-                {description || 'No description'}
-              </p>
+                dangerouslySetInnerHTML={{ __html: description ? renderMarkdown(description) : 'No description' }}
+              />
             )}
           </div>
 
@@ -312,6 +426,143 @@ function BoardCardModal({ card, columns, listId, access, apiCall, user, onClose,
               </div>
             )}
           </div>
+          {/* Tags */}
+          <div className="board-card-field">
+            <label>Tags</label>
+            <div className="board-card-tags-section">
+              <div className="board-card-tags">
+                {cardTags.map(tag => (
+                  <span
+                    key={tag.id}
+                    className="board-card-tag-pill"
+                    style={{ backgroundColor: tag.color || '#6b7280' }}
+                  >
+                    {tag.name}
+                    {canWrite && (
+                      <button
+                        className="board-card-tag-remove"
+                        onClick={() => handleDetachTag(tag.id)}
+                        title="Remove tag"
+                      >
+                        x
+                      </button>
+                    )}
+                  </span>
+                ))}
+                {cardTags.length === 0 && (
+                  <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>No tags</span>
+                )}
+              </div>
+              {canWrite && (boardTags || []).filter(t => !cardTags.find(ct => ct.id === t.id)).length > 0 && (
+                <select
+                  className="board-card-tag-select"
+                  value=""
+                  onChange={e => { if (e.target.value) handleAttachTag(Number(e.target.value)); }}
+                >
+                  <option value="">Add tag...</option>
+                  {(boardTags || [])
+                    .filter(t => !cardTags.find(ct => ct.id === t.id))
+                    .map(t => (
+                      <option key={t.id} value={t.id}>{t.name}</option>
+                    ))}
+                </select>
+              )}
+              {canAdmin && (
+                <button
+                  className="btn btn-secondary btn-small board-manage-tags-btn"
+                  onClick={() => setShowManageTags(!showManageTags)}
+                >
+                  Manage Tags
+                </button>
+              )}
+              {showManageTags && canAdmin && (
+                <div className="board-manage-tags">
+                  <form className="board-manage-tags-form" onSubmit={handleCreateTag}>
+                    <input
+                      type="text"
+                      placeholder="New tag name..."
+                      value={newTagName}
+                      onChange={e => setNewTagName(e.target.value)}
+                    />
+                    <input
+                      type="color"
+                      value={newTagColor}
+                      onChange={e => setNewTagColor(e.target.value)}
+                      title="Tag color"
+                    />
+                    <button type="submit" className="btn btn-primary btn-small">Create</button>
+                  </form>
+                  <div className="board-manage-tags-list">
+                    {(boardTags || []).map(t => (
+                      <div key={t.id} className="board-manage-tag-item">
+                        <span
+                          className="board-card-tag-pill"
+                          style={{ backgroundColor: t.color || '#6b7280' }}
+                        >
+                          {t.name}
+                        </span>
+                        <button
+                          className="comment-action-btn comment-action-delete"
+                          onClick={() => handleDeleteTag(t.id)}
+                          title="Delete tag"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Checklist */}
+        <div className="board-card-checklist">
+          <h4>Checklist ({checklistItems.filter(i => i.done).length}/{checklistItems.length})</h4>
+          {checklistItems.length > 0 && (
+            <div className="checklist-progress">
+              <div
+                className="checklist-progress-bar"
+                style={{ width: checklistItems.length > 0 ? (checklistItems.filter(i => i.done).length / checklistItems.length * 100) + '%' : '0%' }}
+              />
+            </div>
+          )}
+          <ul className="checklist-items">
+            {checklistItems.map(item => (
+              <li key={item.id} className={'checklist-item' + (item.done ? ' checklist-item-done' : '')}>
+                <label className="checklist-item-label">
+                  <input
+                    type="checkbox"
+                    checked={item.done}
+                    onChange={() => canWrite && handleToggleChecklistItem(item.id, item.done)}
+                    disabled={!canWrite}
+                  />
+                  <span className="checklist-item-text">{item.text}</span>
+                </label>
+                {canWrite && (
+                  <button
+                    className="checklist-item-delete"
+                    onClick={() => handleDeleteChecklistItem(item.id)}
+                    title="Remove item"
+                  >
+                    x
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+          {canWrite && (
+            <form className="checklist-add-form" onSubmit={handleAddChecklistItem}>
+              <input
+                type="text"
+                placeholder="Add an item..."
+                value={newChecklistText}
+                onChange={e => setNewChecklistText(e.target.value)}
+              />
+              <button type="submit" className="btn btn-primary btn-small" disabled={!newChecklistText.trim()}>Add</button>
+            </form>
+          )}
         </div>
 
         {/* Save / Delete actions */}
@@ -378,7 +629,13 @@ function BoardCardModal({ card, columns, listId, access, apiCall, user, onClose,
                   </div>
                 ) : (
                   <>
-                    <p className="comment-body">{comment.body}</p>
+                    <div
+                      className="comment-body md-rendered"
+                      onClick={() => { if (comment.body && comment.body.length > 120) setExpandedCommentId(comment.id); }}
+                      style={{ cursor: comment.body && comment.body.length > 120 ? 'pointer' : 'default' }}
+                      title={comment.body && comment.body.length > 120 ? 'Click to expand' : undefined}
+                      dangerouslySetInnerHTML={{ __html: renderMarkdown(comment.body) }}
+                    />
                     {comment.author_pubkey === user?.pubkey && (
                       <div className="comment-actions">
                         <button
@@ -435,7 +692,7 @@ function BoardCardModal({ card, columns, listId, access, apiCall, user, onClose,
             className="board-card-desc-expanded"
             onClick={e => e.stopPropagation()}
           >
-            <p style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{description}</p>
+            <div className="md-rendered" style={{ margin: 0 }} dangerouslySetInnerHTML={{ __html: renderMarkdown(description) }} />
             <button
               className="btn btn-secondary btn-small"
               onClick={() => setDescriptionExpanded(false)}
@@ -445,6 +702,37 @@ function BoardCardModal({ card, columns, listId, access, apiCall, user, onClose,
           </div>
         </div>
       )}
+
+      {/* Expanded comment overlay */}
+      {expandedCommentId && (() => {
+        const c = comments.find(x => x.id === expandedCommentId);
+        if (!c) return null;
+        return (
+          <div
+            className="board-card-desc-expanded-overlay"
+            onClick={() => setExpandedCommentId(null)}
+          >
+            <div
+              className="board-card-desc-expanded"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="comment-header" style={{ marginBottom: '0.5rem' }}>
+                <span className="comment-author">
+                  {c.author_label || truncatePubkey(c.author_pubkey)}
+                </span>
+                <span className="comment-time">{formatTimestamp(c.created_at)}</span>
+              </div>
+              <div className="md-rendered" dangerouslySetInnerHTML={{ __html: renderMarkdown(c.body) }} />
+              <button
+                className="btn btn-secondary btn-small"
+                onClick={() => setExpandedCommentId(null)}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

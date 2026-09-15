@@ -286,21 +286,165 @@ describe('priority label helper', () => {
   });
 });
 
+// ── Expandable comments ─────────────────────────────────────────────────
+
+describe('expandable comments', () => {
+  test('tracks expandedCommentId state', () => {
+    expect(src).toContain('expandedCommentId');
+    expect(src).toContain('setExpandedCommentId');
+  });
+
+  test('long comments are clickable to expand (threshold > 120 chars)', () => {
+    expect(src).toMatch(/comment\.body\.length\s*>\s*120/);
+    expect(src).toContain("'Click to expand'");
+  });
+
+  test('expanded comment overlay reuses the description overlay CSS class', () => {
+    const expandedOverlayCount = (src.match(/board-card-desc-expanded-overlay/g) || []).length;
+    expect(expandedOverlayCount).toBeGreaterThanOrEqual(2);
+  });
+
+  test('expanded comment shows author and timestamp', () => {
+    const overlaySection = src.slice(src.lastIndexOf('board-card-desc-expanded-overlay'));
+    expect(overlaySection).toContain('comment-author');
+    expect(overlaySection).toContain('comment-time');
+  });
+
+  test('expanded comment has a close button', () => {
+    const lastOverlay = src.slice(src.lastIndexOf('board-card-desc-expanded-overlay'));
+    expect(lastOverlay).toContain('setExpandedCommentId(null)');
+  });
+});
+
 // ── Escape key ──────────────────────────────────────────────────────────
 
 describe('escape key handling', () => {
-  test('escape cancels comment editing first, then closes modal', () => {
+  test('escape closes expanded comment first, then description, then editing, then modal', () => {
     const escIdx = src.indexOf("'Escape'");
-    const escBlock = src.slice(escIdx, escIdx + 300);
+    const escBlock = src.slice(escIdx, escIdx + 400);
+    const expandedCommentIdx = escBlock.indexOf('expandedCommentId');
+    const descExpandedIdx = escBlock.indexOf('descriptionExpanded');
     const editingIdx = escBlock.indexOf('editingCommentId');
     const onCloseIdx = escBlock.indexOf('onClose');
 
-    expect(editingIdx).toBeGreaterThan(-1);
+    expect(expandedCommentIdx).toBeGreaterThan(-1);
+    expect(expandedCommentIdx).toBeLessThan(descExpandedIdx);
+    expect(descExpandedIdx).toBeLessThan(editingIdx);
     expect(editingIdx).toBeLessThan(onCloseIdx);
   });
 
   test('cleans up keydown listener on unmount', () => {
     expect(src).toMatch(/removeEventListener\(\s*['"]keydown['"]/);
+  });
+});
+
+// ── Board tags ─────────────────────────────────────────────────────────
+
+describe('board tags', () => {
+  test('accepts boardTags prop', () => {
+    expect(src).toMatch(
+      /function\s+BoardCardModal\(\s*\{[^}]*boardTags/,
+    );
+  });
+
+  test('tracks cardTags state from card.tags', () => {
+    expect(src).toContain('cardTags');
+    expect(src).toContain('setCardTags');
+    expect(src).toMatch(/useState\(card\.tags\s*\|\|\s*\[\]\)/);
+  });
+
+  test('attach tag posts to /boards/:listId/cards/:cardId/tags', () => {
+    expect(src).toMatch(/\/cards\/['"]\s*\+\s*card\.id\s*\+\s*['"]\/tags/);
+    const attachSection = src.slice(
+      src.indexOf('handleAttachTag'),
+      src.indexOf('handleAttachTag') + 400,
+    );
+    expect(attachSection).toMatch(/method:\s*['"]POST['"]/);
+    expect(attachSection).toContain('tagId');
+  });
+
+  test('detach tag sends DELETE to /cards/:cardId/tags/:tagId', () => {
+    const detachSection = src.slice(
+      src.indexOf('handleDetachTag'),
+      src.indexOf('handleDetachTag') + 400,
+    );
+    expect(detachSection).toMatch(/method:\s*['"]DELETE['"]/);
+  });
+
+  test('create tag posts to /boards/:listId/tags (admin)', () => {
+    const createSection = src.slice(
+      src.indexOf('handleCreateTag'),
+      src.indexOf('handleCreateTag') + 400,
+    );
+    expect(createSection).toMatch(/method:\s*['"]POST['"]/);
+    expect(createSection).toContain('newTagName');
+  });
+
+  test('delete tag sends DELETE to /boards/:listId/tags/:tagId (admin)', () => {
+    const deleteSection = src.slice(
+      src.indexOf('handleDeleteTag'),
+      src.indexOf('handleDeleteTag') + 400,
+    );
+    expect(deleteSection).toMatch(/method:\s*['"]DELETE['"]/);
+  });
+
+  test('manage tags UI gated by canAdmin', () => {
+    expect(src).toContain('showManageTags');
+    expect(src).toContain('Manage Tags');
+  });
+});
+
+// ── Markdown rendering ─────────────────────────────────────────────
+
+describe('markdown rendering', () => {
+  test('imports renderMarkdown from lib', () => {
+    expect(src).toMatch(/import\s+renderMarkdown\s+from\s+['"]\.\.\/lib\/renderMarkdown['"]/);
+  });
+
+  test('read-only description uses renderMarkdown with dangerouslySetInnerHTML', () => {
+    expect(src).toMatch(/board-card-desc-ro[\s\S]*?md-rendered/);
+    expect(src).toMatch(/dangerouslySetInnerHTML[\s\S]*?renderMarkdown\(description\)/);
+  });
+
+  test('comment body uses renderMarkdown with dangerouslySetInnerHTML', () => {
+    expect(src).toMatch(/comment-body[\s\S]*?md-rendered/);
+    expect(src).toMatch(/renderMarkdown\(comment\.body\)/);
+  });
+
+  test('expanded description overlay uses renderMarkdown', () => {
+    const expandedOverlays = src.split('board-card-desc-expanded-overlay');
+    const hasRender = expandedOverlays.some(s => s.includes('renderMarkdown(description)'));
+    expect(hasRender).toBe(true);
+  });
+
+  test('expanded comment overlay uses renderMarkdown', () => {
+    expect(src).toMatch(/renderMarkdown\(c\.body\)/);
+  });
+});
+
+// ── Markdown rendering ─────────────────────────────────────────────────
+
+describe('markdown rendering', () => {
+  test('imports renderMarkdown', () => {
+    expect(src).toMatch(/import\s+renderMarkdown\s+from\s+['"]\.\.\/lib\/renderMarkdown['"]/);
+  });
+
+  test('read-only description uses dangerouslySetInnerHTML with renderMarkdown', () => {
+    expect(src).toMatch(/board-card-desc-ro[\s\S]*?dangerouslySetInnerHTML[\s\S]*?renderMarkdown\(description\)/);
+  });
+
+  test('comment bodies use dangerouslySetInnerHTML with renderMarkdown', () => {
+    expect(src).toMatch(/comment-body[\s\S]*?dangerouslySetInnerHTML[\s\S]*?renderMarkdown\(comment\.body\)/);
+  });
+
+  test('expanded comment uses renderMarkdown too', () => {
+    const expandedOverlay = src.slice(src.lastIndexOf('board-card-desc-expanded-overlay'));
+    expect(expandedOverlay).toContain('renderMarkdown');
+  });
+
+  test('description and comments get md-rendered class', () => {
+    const mdRenderedCount = (src.match(/md-rendered/g) || []).length;
+    expect(mdRenderedCount).toBeGreaterThanOrEqual(3);
   });
 });
 
@@ -327,5 +471,65 @@ describe('timestamp formatting', () => {
   test('shows relative minutes and hours', () => {
     expect(src).toMatch(/diffMins\s*\+\s*['"]m ago['"]/);
     expect(src).toMatch(/diffHrs\s*\+\s*['"]h ago['"]/);
+  });
+});
+
+// ── Checklist ──────────────────────────────────────────────────────────
+
+describe('checklist', () => {
+  test('tracks checklistItems and newChecklistText state', () => {
+    expect(src).toContain('checklistItems');
+    expect(src).toContain('setChecklistItems');
+    expect(src).toContain('newChecklistText');
+  });
+
+  test('loads checklist on mount via /boards/:listId/cards/:cardId/checklist', () => {
+    expect(src).toContain('loadChecklist');
+    expect(src).toMatch(/\/cards\/['"]\s*\+\s*card\.id\s*\+\s*['"]\/checklist/);
+  });
+
+  test('add item posts text to checklist endpoint', () => {
+    const addSection = src.slice(
+      src.indexOf('handleAddChecklistItem'),
+      src.indexOf('handleAddChecklistItem') + 500,
+    );
+    expect(addSection).toMatch(/method:\s*['"]POST['"]/);
+    expect(addSection).toContain('newChecklistText');
+  });
+
+  test('toggle sends PUT with flipped done flag', () => {
+    const toggleSection = src.slice(
+      src.indexOf('handleToggleChecklistItem'),
+      src.indexOf('handleToggleChecklistItem') + 400,
+    );
+    expect(toggleSection).toMatch(/method:\s*['"]PUT['"]/);
+    expect(toggleSection).toContain('!done');
+  });
+
+  test('delete sends DELETE for checklist item', () => {
+    const deleteSection = src.slice(
+      src.indexOf('handleDeleteChecklistItem'),
+      src.indexOf('handleDeleteChecklistItem') + 300,
+    );
+    expect(deleteSection).toMatch(/method:\s*['"]DELETE['"]/);
+  });
+
+  test('renders checklist-items list with checkboxes', () => {
+    expect(src).toContain('checklist-items');
+    expect(src).toContain('checklist-item');
+    expect(src).toMatch(/type="checkbox"/);
+  });
+
+  test('shows progress count and bar', () => {
+    expect(src).toContain('checklist-progress');
+    expect(src).toContain('checklist-progress-bar');
+    expect(src).toMatch(/checklistItems\.filter\(i\s*=>\s*i\.done\)\.length/);
+  });
+
+  test('add form gated by canWrite', () => {
+    expect(src).toContain('checklist-add-form');
+    const formIdx = src.indexOf('checklist-add-form');
+    const beforeForm = src.slice(Math.max(0, formIdx - 200), formIdx);
+    expect(beforeForm).toContain('canWrite');
   });
 });

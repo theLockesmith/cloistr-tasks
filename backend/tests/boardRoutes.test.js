@@ -650,3 +650,222 @@ describe('admin self-resignation carve-out', () => {
     expect(guardWindow).toContain('pubkey !== req.user.id');
   });
 });
+
+// ── 17. Board tag route registration ──────────────────────────────────
+
+describe('all board tag routes are registered with authenticateToken', () => {
+  const routes = [
+    ['get',    '/api/boards/:listId/tags'],
+    ['post',   '/api/boards/:listId/tags'],
+    ['put',    '/api/boards/:listId/tags/:tagId'],
+    ['delete', '/api/boards/:listId/tags/:tagId'],
+    ['post',   '/api/boards/:listId/cards/:cardId/tags'],
+    ['delete', '/api/boards/:listId/cards/:cardId/tags/:tagId'],
+  ];
+
+  for (const [method, routePath] of routes) {
+    test(`${method.toUpperCase()} ${routePath}`, () => {
+      expect(extractRouteBody(serverSrc, method, routePath)).not.toBeNull();
+    });
+  }
+});
+
+// ── 18. Tag CRUD — admin-only ─────────────────────────────────────────
+
+describe('tag create/update/delete require admin access', () => {
+  const adminTagRoutes = [
+    ['post',   '/api/boards/:listId/tags',          'POST tag'],
+    ['put',    '/api/boards/:listId/tags/:tagId',    'PUT tag'],
+    ['delete', '/api/boards/:listId/tags/:tagId',    'DELETE tag'],
+  ];
+
+  for (const [method, routePath, label] of adminTagRoutes) {
+    test(`${label} guards with hasAccess(access, 'admin')`, () => {
+      const body = extractRouteBody(serverSrc, method, routePath);
+      expect(body).toContain("hasAccess(access, 'admin')");
+    });
+  }
+
+  // ADMISSION: GET tags does NOT gate on a specific level — any non-null
+  // access is sufficient (same as GET board).
+  test('GET tags has no hasAccess gate (read access is sufficient)', () => {
+    const body = extractRouteBody(serverSrc, 'get', '/api/boards/:listId/tags');
+    expect(body).not.toContain("hasAccess(access, 'admin')");
+    expect(body).not.toContain("hasAccess(access, 'write')");
+    expect(body).not.toContain("hasAccess(access, 'owner')");
+  });
+});
+
+// ── 19. Tag attach/detach — write access ──────────────────────────────
+
+describe('tag attach and detach require write access', () => {
+  test('POST attach guards with hasAccess(access, write)', () => {
+    const body = extractRouteBody(serverSrc, 'post', '/api/boards/:listId/cards/:cardId/tags');
+    expect(body).toContain("hasAccess(access, 'write')");
+  });
+
+  test('DELETE detach guards with hasAccess(access, write)', () => {
+    const body = extractRouteBody(serverSrc, 'delete', '/api/boards/:listId/cards/:cardId/tags/:tagId');
+    expect(body).toContain("hasAccess(access, 'write')");
+  });
+
+  test('POST attach uses cardAccess (not listAccess)', () => {
+    const body = extractRouteBody(serverSrc, 'post', '/api/boards/:listId/cards/:cardId/tags');
+    expect(body).toContain('cardAccess');
+    expect(body).not.toContain('listAccess');
+  });
+
+  test('DELETE detach uses cardAccess (not listAccess)', () => {
+    const body = extractRouteBody(serverSrc, 'delete', '/api/boards/:listId/cards/:cardId/tags/:tagId');
+    expect(body).toContain('cardAccess');
+    expect(body).not.toContain('listAccess');
+  });
+});
+
+// ── 20. Tag input validation ──────────────────────────────────────────
+
+describe('tag input validation', () => {
+  test('POST tags rejects missing or blank name', () => {
+    const body = extractRouteBody(serverSrc, 'post', '/api/boards/:listId/tags');
+    expect(body).toContain('Tag name is required');
+  });
+
+  test('POST tags catches 23505 duplicate name', () => {
+    const body = extractRouteBody(serverSrc, 'post', '/api/boards/:listId/tags');
+    expect(body).toContain('23505');
+  });
+
+  test('PUT tags catches 23505 duplicate name on rename', () => {
+    const body = extractRouteBody(serverSrc, 'put', '/api/boards/:listId/tags/:tagId');
+    expect(body).toContain('23505');
+  });
+
+  test('POST attach requires tagId', () => {
+    const body = extractRouteBody(serverSrc, 'post', '/api/boards/:listId/cards/:cardId/tags');
+    expect(body).toContain('tagId is required');
+  });
+});
+
+// ── 21. Tag attach cross-board check ──────────────────────────────────
+
+describe('tag attach verifies tag belongs to board', () => {
+  test('POST attach queries board_tags with list_id to verify ownership', () => {
+    const body = extractRouteBody(serverSrc, 'post', '/api/boards/:listId/cards/:cardId/tags');
+    expect(body).toContain('board_tags');
+    expect(body).toContain('list_id');
+  });
+
+  test('POST attach returns 404 for a tag not on this board', () => {
+    const body = extractRouteBody(serverSrc, 'post', '/api/boards/:listId/cards/:cardId/tags');
+    expect(body).toContain('Tag not found on this board');
+  });
+
+  test('POST attach uses ON CONFLICT DO NOTHING (idempotent)', () => {
+    const body = extractRouteBody(serverSrc, 'post', '/api/boards/:listId/cards/:cardId/tags');
+    expect(body).toContain('ON CONFLICT DO NOTHING');
+  });
+});
+
+// ── 22. GET board includes tags ───────────────────────────────────────
+
+describe('GET /api/boards/:listId includes tags', () => {
+  const body = extractRouteBody(serverSrc, 'get', '/api/boards/:listId');
+
+  test('queries board_tags table', () => {
+    expect(body).toContain('board_tags');
+  });
+
+  test('queries board_card_tags to resolve per-card tags', () => {
+    expect(body).toContain('board_card_tags');
+  });
+
+  test('response envelope includes tags key', () => {
+    expect(body).toMatch(/res\.json\(\s*\{.*tags/s);
+  });
+
+  test('attaches tags array to each card', () => {
+    expect(body).toContain('card.tags');
+  });
+});
+
+// ── 23. Tag DELETE scopes to board (list_id in WHERE) ─────────────────
+
+describe('tag mutations are scoped to the board', () => {
+  test('DELETE tag WHERE includes list_id', () => {
+    const body = extractRouteBody(serverSrc, 'delete', '/api/boards/:listId/tags/:tagId');
+    expect(body).toMatch(/DELETE\s+FROM\s+board_tags\s+WHERE\s+id\s*=.*AND\s+list_id\s*=/s);
+  });
+
+  test('PUT tag WHERE includes list_id', () => {
+    const body = extractRouteBody(serverSrc, 'put', '/api/boards/:listId/tags/:tagId');
+    expect(body).toContain('list_id');
+  });
+});
+
+// ── 24. Checklist CRUD routes ───────────────────────────────────────
+
+describe('checklist routes exist with cardAccess guard', () => {
+  test('GET checklist route uses cardAccess', () => {
+    const body = extractRouteBody(serverSrc, 'get', '/api/boards/:listId/cards/:cardId/checklist');
+    expect(body).not.toBeNull();
+    expect(body).toContain('cardAccess');
+  });
+
+  test('POST checklist requires write access', () => {
+    const body = extractRouteBody(serverSrc, 'post', '/api/boards/:listId/cards/:cardId/checklist');
+    expect(body).not.toBeNull();
+    expect(body).toContain('cardAccess');
+    expect(body).toContain("hasAccess(access, 'write')");
+  });
+
+  test('PUT checklist item requires write access', () => {
+    const body = extractRouteBody(serverSrc, 'put', '/api/boards/:listId/cards/:cardId/checklist/:itemId');
+    expect(body).not.toBeNull();
+    expect(body).toContain("hasAccess(access, 'write')");
+  });
+
+  test('DELETE checklist item requires write access', () => {
+    const body = extractRouteBody(serverSrc, 'delete', '/api/boards/:listId/cards/:cardId/checklist/:itemId');
+    expect(body).not.toBeNull();
+    expect(body).toContain("hasAccess(access, 'write')");
+  });
+
+  // ADMISSION: read access can list items
+  test('GET checklist is accessible to any user with access (no write guard)', () => {
+    const body = extractRouteBody(serverSrc, 'get', '/api/boards/:listId/cards/:cardId/checklist');
+    expect(body).not.toContain("hasAccess(access, 'write')");
+  });
+});
+
+describe('checklist POST validates input', () => {
+  test('POST requires non-empty text', () => {
+    const body = extractRouteBody(serverSrc, 'post', '/api/boards/:listId/cards/:cardId/checklist');
+    expect(body).toContain('Text is required');
+  });
+
+  test('POST auto-increments sort_order from existing items', () => {
+    const body = extractRouteBody(serverSrc, 'post', '/api/boards/:listId/cards/:cardId/checklist');
+    expect(body).toContain('MAX(sort_order)');
+  });
+});
+
+describe('checklist PUT supports partial updates', () => {
+  test('PUT can update text, done, and sort_order', () => {
+    const body = extractRouteBody(serverSrc, 'put', '/api/boards/:listId/cards/:cardId/checklist/:itemId');
+    expect(body).toContain('text');
+    expect(body).toContain('done');
+    expect(body).toMatch(/sort.?[oO]rder/);
+  });
+
+  test('PUT scopes to card_id in WHERE', () => {
+    const body = extractRouteBody(serverSrc, 'put', '/api/boards/:listId/cards/:cardId/checklist/:itemId');
+    expect(body).toContain('card_id');
+  });
+});
+
+describe('checklist DELETE scopes to card', () => {
+  test('DELETE WHERE includes card_id', () => {
+    const body = extractRouteBody(serverSrc, 'delete', '/api/boards/:listId/cards/:cardId/checklist/:itemId');
+    expect(body).toMatch(/DELETE\s+FROM\s+card_checklist_items\s+WHERE\s+id\s*=.*AND\s+card_id\s*=/s);
+  });
+});
