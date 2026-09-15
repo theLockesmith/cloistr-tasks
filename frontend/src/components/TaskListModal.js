@@ -4,7 +4,7 @@ import AddTaskModal from './AddTaskModal';
 import EditTaskModal from './EditTaskModal';
 import EditListModal from './EditListModal';
 import DragDropList from './DragDropList';
-import { isListOwner, canWriteList } from '../lib/accessHelpers';
+import { canAdminList, canWriteList } from '../lib/accessHelpers';
 
 function TaskListModal({ list, onClose, apiCall, user, onTasksUpdated }) {
   const [tasks, setTasks] = useState([]);
@@ -150,7 +150,7 @@ function TaskListModal({ list, onClose, apiCall, user, onTasksUpdated }) {
   const completedTasks = tasks.filter(task => task.completed_at);
 
   // Sharing access gates — see accessHelpers.js for the centralised logic.
-  const isOwner = isListOwner(list);
+  const canAdmin = canAdminList(list);
   const canWrite = canWriteList(list);
 
   // Apply text, priority, and label filters.  Filtering is client-side: we
@@ -196,7 +196,7 @@ function TaskListModal({ list, onClose, apiCall, user, onTasksUpdated }) {
               <h2>{list.name}</h2>
               <p>{list.description}</p>
             </div>
-            {isOwner && (
+            {canAdmin && (
               <button
                 className="btn btn-secondary btn-small"
                 onClick={() => setShowEditList(true)}

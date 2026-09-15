@@ -268,11 +268,12 @@ describe('PUT /api/lists/:listId — visibility update', () => {
     expect(body).toContain('visibility');
   });
 
-  test('UPDATE query includes visibility = COALESCE($13, visibility)', () => {
-    // $13 is the positional parameter for visibility in the UPDATE.  This
+  test('UPDATE query includes visibility = COALESCE($12, visibility)', () => {
+    // $12 is the positional parameter for visibility in the UPDATE.  This
     // ensures visibility is updated when supplied and left unchanged when
-    // omitted (COALESCE semantics).
-    expect(body).toContain('visibility         = COALESCE($13, visibility)');
+    // omitted (COALESCE semantics).  (Was $13 before the user_id parameter
+    // was removed from the WHERE clause for admin access support.)
+    expect(body).toContain('visibility         = COALESCE($12, visibility)');
   });
 
   test("validates that visibility must be 'private' or 'public'", () => {
@@ -292,5 +293,33 @@ describe('PUT /api/lists/:listId — visibility update', () => {
       body.indexOf("visibility !== undefined") + 300
     );
     expect(validationWindow).toContain('400');
+  });
+
+  test('admin can rename — UPDATE no longer filters on user_id', () => {
+    // The UPDATE WHERE clause must key on id alone (not id AND user_id),
+    // because the access check already confirmed admin or owner via
+    // listAccess().  Filtering on user_id would make admin renames return
+    // zero rows and 404.
+    expect(body).toContain('WHERE id = $11');
+    expect(body).not.toContain('user_id = $12');
+  });
+
+  test('visibility change is owner-only even though the endpoint is admin-gated', () => {
+    // An admin can rename, recolor, etc. but visibility stays owner-only.
+    expect(body).toContain("Only the owner can change board visibility");
+  });
+});
+
+// ── 8. Share narrowings — admin cannot grant/revoke admin ────────────────
+
+describe('share narrowings for admin level', () => {
+  test('granting admin permission requires owner access', () => {
+    const body = extractRouteBody(serverSrc, 'post', '/api/lists/:listId/shares');
+    expect(body).toContain("Only the owner can grant admin access");
+  });
+
+  test('removing an admin share requires owner access', () => {
+    const body = extractRouteBody(serverSrc, 'delete', '/api/lists/:listId/shares/:pubkey');
+    expect(body).toContain("Only the owner can remove admin shares");
   });
 });

@@ -7,7 +7,7 @@
  */
 
 /** Permission hierarchy, lowest to highest. */
-const LEVELS = { read: 1, write: 2, owner: 3 };
+const LEVELS = { read: 1, write: 2, admin: 3, owner: 4 };
 
 /**
  * Resolve the caller's access level on a task list.
@@ -15,7 +15,7 @@ const LEVELS = { read: 1, write: 2, owner: 3 };
  * @param {import('pg').Pool} pool
  * @param {number|string}     listId
  * @param {string}            pubkey  - the caller's Nostr pubkey
- * @returns {Promise<'owner'|'write'|'read'|null>}
+ * @returns {Promise<'owner'|'admin'|'write'|'read'|null>}
  *   null means the list does not exist OR the caller has no access.
  */
 export async function listAccess(pool, listId, pubkey) {
@@ -37,7 +37,7 @@ export async function listAccess(pool, listId, pubkey) {
  * Check whether an access level meets or exceeds a required level.
  *
  * @param {string|null} actual    - the level returned by listAccess()
- * @param {'read'|'write'|'owner'} required
+ * @param {'read'|'write'|'admin'|'owner'} required
  * @returns {boolean}
  */
 export function hasAccess(actual, required) {

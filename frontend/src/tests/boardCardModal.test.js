@@ -2,7 +2,7 @@
  * BoardCardModal structural tests.
  *
  * BoardCardModal is the card detail view with editable fields, column move,
- * and a threaded comment section.  Write access gates editing; owner access
+ * and a threaded comment section.  Write access gates editing; admin access
  * gates deletion.  Comments are author-only for edit/delete.
  *
  * Source-level structural tests matching the project's established pattern.
@@ -33,22 +33,22 @@ describe('BoardCardModal structure', () => {
 // ── Access control ──────────────────────────────────────────────────────
 
 describe('access control', () => {
-  test('derives canWrite from owner or write access', () => {
-    expect(src).toMatch(/canWrite\s*=\s*access\s*===\s*['"]owner['"]\s*\|\|\s*access\s*===\s*['"]write['"]/);
+  test('derives canWrite from owner, admin, or write access', () => {
+    expect(src).toMatch(/canWrite\s*=\s*access\s*===\s*['"]owner['"]\s*\|\|\s*access\s*===\s*['"]admin['"]\s*\|\|\s*access\s*===\s*['"]write['"]/);
   });
 
-  test('derives isOwner from owner access', () => {
-    expect(src).toMatch(/isOwner\s*=\s*access\s*===\s*['"]owner['"]/);
+  test('derives canAdmin from owner or admin access', () => {
+    expect(src).toMatch(/canAdmin\s*=\s*access\s*===\s*['"]owner['"]\s*\|\|\s*access\s*===\s*['"]admin['"]/);
   });
 
-  test('card deletion is owner-only', () => {
-    // Delete Card button is inside an isOwner guard
+  test('card deletion requires admin access', () => {
+    // Delete Card button is inside a canAdmin guard
     const deleteBtnIdx = src.indexOf('Delete Card');
     const beforeDelete = src.slice(
       Math.max(0, deleteBtnIdx - 200),
       deleteBtnIdx,
     );
-    expect(beforeDelete).toContain('isOwner');
+    expect(beforeDelete).toContain('canAdmin');
   });
 
   test('editable title field gated by canWrite', () => {

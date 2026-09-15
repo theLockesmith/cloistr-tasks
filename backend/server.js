@@ -649,11 +649,18 @@ app.put('/api/lists/:listId', authenticateToken, async (req, res) => {
     if (!access) {
       return res.status(404).json({ error: 'List not found' });
     }
-    if (!hasAccess(access, 'owner')) {
+    if (!hasAccess(access, 'admin')) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
+    // Visibility changes (public/private) are owner-only.
+    if (visibility !== undefined && access !== 'owner') {
+      return res.status(403).json({ error: 'Only the owner can change board visibility' });
+    }
+
     // COALESCE keeps existing values for fields the caller did not supply.
+    // Access was already verified above via listAccess(); the WHERE keys on
+    // id alone so admins (who are not user_id) can update the row.
     const result = await pool.query(`
       UPDATE task_lists
       SET name               = COALESCE($1, name),
@@ -666,8 +673,8 @@ app.put('/api/lists/:listId', authenticateToken, async (req, res) => {
           reset_time         = COALESCE($8, reset_time),
           reset_days         = COALESCE($9, reset_days),
           custom_reset_days  = COALESCE($10, custom_reset_days),
-          visibility         = COALESCE($13, visibility)
-      WHERE id = $11 AND user_id = $12
+          visibility         = COALESCE($12, visibility)
+      WHERE id = $11
       RETURNING *
     `, [
       name === undefined || name === '' ? null : String(name).trim(),
@@ -681,7 +688,6 @@ app.put('/api/lists/:listId', authenticateToken, async (req, res) => {
       emptyToNull(reset_days),
       Array.isArray(custom_reset_days) ? custom_reset_days : (custom_reset_days === undefined ? null : []),
       listId,
-      req.user.id,
       emptyToNull(visibility),
     ]);
 
@@ -1174,7 +1180,7 @@ app.get('/api/templates/:templateId/subtasks', authenticateToken, async (req, re
 
 // ── List sharing ─────────────────────────────────────────────────────────────
 
-// List shares for a list (owner only).
+// List shares for a list (admin or owner).
 app.get('/api/lists/:listId/shares', authenticateToken, async (req, res) => {
   try {
     const { listId } = req.params;
@@ -1182,8 +1188,8 @@ app.get('/api/lists/:listId/shares', authenticateToken, async (req, res) => {
     if (!access) {
       return res.status(404).json({ error: 'List not found' });
     }
-    if (!hasAccess(access, 'owner')) {
-      return res.status(403).json({ error: 'Only the list owner can view shares' });
+    if (!hasAccess(access, 'admin')) {
+      return res.status(403).json({ error: 'Admin access required to view shares' });
     }
 
     const result = await pool.query(
@@ -1197,7 +1203,7 @@ app.get('/api/lists/:listId/shares', authenticateToken, async (req, res) => {
   }
 });
 
-// Share a list with a pubkey (owner only).
+// Share a list with a pubkey (admin or owner).
 app.post('/api/lists/:listId/shares', authenticateToken, async (req, res) => {
   try {
     const { listId } = req.params;
@@ -1206,8 +1212,8 @@ app.post('/api/lists/:listId/shares', authenticateToken, async (req, res) => {
     if (!/^[0-9a-f]{64}$/.test(pubkey)) {
       return res.status(400).json({ error: 'A valid 64-character hex pubkey is required' });
     }
-    if (permission && !['read', 'write'].includes(permission)) {
-      return res.status(400).json({ error: 'Permission must be "read" or "write"' });
+    if (permission && !['read', 'write', 'admin'].includes(permission)) {
+      return res.status(400).json({ error: 'Permission must be "read", "write", or "admin"' });
     }
     if (pubkey === req.user.id) {
       return res.status(400).json({ error: 'Cannot share a list with yourself' });
@@ -1217,8 +1223,14 @@ app.post('/api/lists/:listId/shares', authenticateToken, async (req, res) => {
     if (!access) {
       return res.status(404).json({ error: 'List not found' });
     }
-    if (!hasAccess(access, 'owner')) {
-      return res.status(403).json({ error: 'Only the list owner can share it' });
+    if (!hasAccess(access, 'admin')) {
+      return res.status(403).json({ error: 'Admin access required to share this list' });
+    }
+
+    // Granting 'admin' level is owner-only — prevents the admin set from
+    // being self-expanding.
+    if (permission === 'admin' && access !== 'owner') {
+      return res.status(403).json({ error: 'Only the owner can grant admin access' });
     }
 
     const result = await pool.query(`
@@ -1235,7 +1247,7 @@ app.post('/api/lists/:listId/shares', authenticateToken, async (req, res) => {
   }
 });
 
-// Remove a share (owner only).
+// Remove a share (admin or owner).
 app.delete('/api/lists/:listId/shares/:pubkey', authenticateToken, async (req, res) => {
   try {
     const { listId, pubkey } = req.params;
@@ -1248,8 +1260,19 @@ app.delete('/api/lists/:listId/shares/:pubkey', authenticateToken, async (req, r
     if (!access) {
       return res.status(404).json({ error: 'List not found' });
     }
-    if (!hasAccess(access, 'owner')) {
-      return res.status(403).json({ error: 'Only the list owner can remove shares' });
+    if (!hasAccess(access, 'admin')) {
+      return res.status(403).json({ error: 'Admin access required to remove shares' });
+    }
+
+    // Removing an admin share is owner-only — prevents admins from demoting
+    // each other.  Exception: an admin may resign their OWN admin grant.
+    const targetShare = await pool.query(
+      'SELECT permission FROM task_list_shares WHERE list_id = $1 AND pubkey = $2',
+      [listId, pubkey]
+    );
+    if (targetShare.rows.length > 0 && targetShare.rows[0].permission === 'admin'
+        && access !== 'owner' && pubkey !== req.user.id) {
+      return res.status(403).json({ error: 'Only the owner can remove admin shares' });
     }
 
     const result = await pool.query(
@@ -1263,6 +1286,86 @@ app.delete('/api/lists/:listId/shares/:pubkey', authenticateToken, async (req, r
   } catch (error) {
     console.error('Error removing share:', error);
     res.status(500).json({ error: 'Failed to remove share' });
+  }
+});
+
+// Transfer ownership of a list (owner only).
+// Moves task_lists.user_id to a pubkey that already holds a share.
+// Demotes the previous owner to admin rather than dropping them.
+app.post('/api/lists/:listId/transfer', authenticateToken, async (req, res) => {
+  try {
+    const { listId } = req.params;
+    const { pubkey } = req.body;
+
+    if (!pubkey || !/^[0-9a-f]{64}$/.test(pubkey)) {
+      return res.status(400).json({ error: 'A valid 64-character hex pubkey is required' });
+    }
+    if (pubkey === req.user.id) {
+      return res.status(400).json({ error: 'Cannot transfer to yourself' });
+    }
+
+    const access = await listAccess(pool, listId, req.user.id);
+    if (!access) {
+      return res.status(404).json({ error: 'List not found' });
+    }
+    if (!hasAccess(access, 'owner')) {
+      return res.status(403).json({ error: 'Only the owner can transfer ownership' });
+    }
+
+    // The target must already have a share on this list.
+    const shareCheck = await pool.query(
+      'SELECT id FROM task_list_shares WHERE list_id = $1 AND pubkey = $2',
+      [listId, pubkey]
+    );
+    if (shareCheck.rows.length === 0) {
+      return res.status(400).json({ error: 'Target must already have a share on this list' });
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Remove the target's share row (they become the owner, so the row is redundant).
+      await client.query(
+        'DELETE FROM task_list_shares WHERE list_id = $1 AND pubkey = $2',
+        [listId, pubkey]
+      );
+
+      // Demote the previous owner to admin.
+      await client.query(`
+        INSERT INTO task_list_shares (list_id, pubkey, permission)
+        VALUES ($1, $2, 'admin')
+        ON CONFLICT (list_id, pubkey) DO UPDATE SET permission = 'admin'
+      `, [listId, req.user.id]);
+
+      // Transfer ownership.
+      await client.query(
+        'UPDATE task_lists SET user_id = $1 WHERE id = $2',
+        [pubkey, listId]
+      );
+
+      await client.query('COMMIT');
+
+      // Return the list with the caller's new access level (admin).
+      const result = await pool.query(`
+        SELECT l.*,
+               CASE WHEN l.user_id = $1 THEN 'owner'
+                    ELSE tls.permission
+               END AS access
+        FROM task_lists l
+        LEFT JOIN task_list_shares tls ON tls.list_id = l.id AND tls.pubkey = $1
+        WHERE l.id = $2
+      `, [req.user.id, listId]);
+      res.json(result.rows[0]);
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error('Error transferring ownership:', error);
+    res.status(500).json({ error: 'Failed to transfer ownership' });
   }
 });
 
@@ -1329,7 +1432,7 @@ app.post('/api/boards/:listId/columns', authenticateToken, async (req, res) => {
     const { listId } = req.params;
     const access = await listAccess(pool, listId, req.user.id);
     if (!access) return res.status(404).json({ error: 'Board not found' });
-    if (!hasAccess(access, 'owner')) return res.status(403).json({ error: 'Column creation requires owner access' });
+    if (!hasAccess(access, 'admin')) return res.status(403).json({ error: 'Column creation requires admin access' });
 
     const { name, color } = req.body;
     if (!name || !name.trim()) return res.status(400).json({ error: 'Column name is required' });
@@ -1359,7 +1462,7 @@ app.put('/api/boards/:listId/columns/:columnId', authenticateToken, async (req, 
     const { listId, columnId } = req.params;
     const access = await listAccess(pool, listId, req.user.id);
     if (!access) return res.status(404).json({ error: 'Board not found' });
-    if (!hasAccess(access, 'owner')) return res.status(403).json({ error: 'Column update requires owner access' });
+    if (!hasAccess(access, 'admin')) return res.status(403).json({ error: 'Column update requires admin access' });
 
     const { name, color, sortOrder, collapsed } = req.body;
 
@@ -1398,7 +1501,7 @@ app.delete('/api/boards/:listId/columns/:columnId', authenticateToken, async (re
     const { listId, columnId } = req.params;
     const access = await listAccess(pool, listId, req.user.id);
     if (!access) return res.status(404).json({ error: 'Board not found' });
-    if (!hasAccess(access, 'owner')) return res.status(403).json({ error: 'Column deletion requires owner access' });
+    if (!hasAccess(access, 'admin')) return res.status(403).json({ error: 'Column deletion requires admin access' });
 
     const result = await pool.query(
       'DELETE FROM board_columns WHERE id = $1 AND list_id = $2 RETURNING id',
@@ -1563,7 +1666,7 @@ app.delete('/api/boards/:listId/cards/:cardId', authenticateToken, async (req, r
     const { listId, cardId } = req.params;
     const { access } = await cardAccess(pool, cardId, req.user.id);
     if (!access) return res.status(404).json({ error: 'Card not found' });
-    if (!hasAccess(access, 'owner')) return res.status(403).json({ error: 'Card deletion requires owner access' });
+    if (!hasAccess(access, 'admin')) return res.status(403).json({ error: 'Card deletion requires admin access' });
 
     const result = await pool.query(
       'DELETE FROM board_cards WHERE id = $1 AND list_id = $2 RETURNING id',

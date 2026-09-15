@@ -7,7 +7,7 @@
  * exercise at the HTTP level.  Source-level assertions verify structural
  * contracts — middleware presence, access guards, validation, idempotency —
  * without any infrastructure.  If a guard is moved outside its handler, or
- * 'owner' is silently weakened to 'write', these tests catch it immediately.
+ * 'admin' is silently weakened to 'write', these tests catch it immediately.
  *
  * ADMISSION INVARIANT (carried from the project's access test conventions):
  * Every refusal test is paired with a corresponding admission test.  A guard
@@ -115,9 +115,9 @@ describe('all board routes are registered with authenticateToken', () => {
   }
 });
 
-// ── 2. Column CRUD — owner-only ───────────────────────────────────────────
+// ── 2. Column CRUD — admin-only ───────────────────────────────────────────
 
-describe('column CRUD requires owner access', () => {
+describe('column CRUD requires admin access', () => {
   const columnRoutes = [
     ['post',   '/api/boards/:listId/columns'],
     ['put',    '/api/boards/:listId/columns/:columnId'],
@@ -125,32 +125,32 @@ describe('column CRUD requires owner access', () => {
   ];
 
   for (const [method, routePath] of columnRoutes) {
-    test(`${method.toUpperCase()} ${routePath} — guards with hasAccess(access, 'owner')`, () => {
+    test(`${method.toUpperCase()} ${routePath} — guards with hasAccess(access, 'admin')`, () => {
       const body = extractRouteBody(serverSrc, method, routePath);
-      expect(body).toContain("hasAccess(access, 'owner')");
+      expect(body).toContain("hasAccess(access, 'admin')");
     });
 
-    test(`${method.toUpperCase()} ${routePath} — does NOT accept write without owner (REFUSAL)`, () => {
-      // The guard must require 'owner', not just 'write'.
-      // hasAccess('write', 'owner') returns false, so a write-only user must be
-      // refused.  We verify by confirming 'owner' is the required level here.
+    test(`${method.toUpperCase()} ${routePath} — does NOT accept write without admin (REFUSAL)`, () => {
+      // The guard must require 'admin', not just 'write'.
+      // hasAccess('write', 'admin') returns false, so a write-only user must be
+      // refused.  We verify by confirming 'admin' is the required level here.
       const body = extractRouteBody(serverSrc, method, routePath);
       // There must be no weaker hasAccess(access, 'write') guard in column routes
-      // that could short-circuit before the 'owner' check and admit write users.
-      // (A write guard AFTER an owner guard would never be reached for these routes.)
-      const ownerIdx = body.indexOf("hasAccess(access, 'owner')");
+      // that could short-circuit before the 'admin' check and admit write users.
+      // (A write guard AFTER an admin guard would never be reached for these routes.)
+      const adminIdx = body.indexOf("hasAccess(access, 'admin')");
       const writeIdx = body.indexOf("hasAccess(access, 'write')");
-      // Either no write guard exists, or the owner guard appears first.
+      // Either no write guard exists, or the admin guard appears first.
       if (writeIdx !== -1) {
-        expect(ownerIdx).toBeLessThan(writeIdx);
+        expect(adminIdx).toBeLessThan(writeIdx);
       } else {
-        expect(ownerIdx).toBeGreaterThan(-1);
+        expect(adminIdx).toBeGreaterThan(-1);
       }
     });
   }
 
-  // ADMISSION: owner access IS admitted (hasAccess hierarchy covers this via
-  // the pure hasAccess tests below — owner satisfies 'owner')
+  // ADMISSION: owner and admin access are both admitted (hasAccess hierarchy
+  // covers this via the pure hasAccess tests below — owner and admin satisfy 'admin')
 });
 
 // ── 3. Card create + move — write access ─────────────────────────────────
@@ -172,12 +172,12 @@ describe('card create and move require write access', () => {
   // ADMISSION: owner satisfies write — verified in hasAccess section below
 });
 
-// ── 4. Card delete — owner only ───────────────────────────────────────────
+// ── 4. Card delete — admin only ───────────────────────────────────────────
 
-describe('card delete requires owner access', () => {
-  test("DELETE /api/boards/:listId/cards/:cardId guards with hasAccess(access, 'owner')", () => {
+describe('card delete requires admin access', () => {
+  test("DELETE /api/boards/:listId/cards/:cardId guards with hasAccess(access, 'admin')", () => {
     const body = extractRouteBody(serverSrc, 'delete', '/api/boards/:listId/cards/:cardId');
-    expect(body).toContain("hasAccess(access, 'owner')");
+    expect(body).toContain("hasAccess(access, 'admin')");
   });
 
   test('card delete does not use a weaker write guard (REFUSAL)', () => {
@@ -409,12 +409,28 @@ describe('hasAccess permission hierarchy', () => {
     expect(hasAccess('owner', 'owner')).toBe(true);
   });
 
+  test('owner ADMITS admin requirement (ADMISSION: owner can do everything admin can)', () => {
+    expect(hasAccess('owner', 'admin')).toBe(true);
+  });
+
   test('owner ADMITS write requirement (ADMISSION: owner can do everything write can)', () => {
     expect(hasAccess('owner', 'write')).toBe(true);
   });
 
   test('owner ADMITS read requirement (ADMISSION)', () => {
     expect(hasAccess('owner', 'read')).toBe(true);
+  });
+
+  test('admin ADMITS admin requirement (ADMISSION)', () => {
+    expect(hasAccess('admin', 'admin')).toBe(true);
+  });
+
+  test('admin ADMITS write requirement (ADMISSION: admin can do everything write can)', () => {
+    expect(hasAccess('admin', 'write')).toBe(true);
+  });
+
+  test('admin ADMITS read requirement (ADMISSION)', () => {
+    expect(hasAccess('admin', 'read')).toBe(true);
   });
 
   test('write ADMITS write requirement (ADMISSION)', () => {
@@ -431,12 +447,24 @@ describe('hasAccess permission hierarchy', () => {
 
   // Refusal tests — confirm the floor is actually enforced
 
-  test('write does NOT satisfy owner requirement (REFUSAL: write cannot manage columns)', () => {
+  test('admin does NOT satisfy owner requirement (REFUSAL: admin cannot transfer ownership)', () => {
+    expect(hasAccess('admin', 'owner')).toBe(false);
+  });
+
+  test('write does NOT satisfy admin requirement (REFUSAL: write cannot manage columns)', () => {
+    expect(hasAccess('write', 'admin')).toBe(false);
+  });
+
+  test('write does NOT satisfy owner requirement (REFUSAL)', () => {
     expect(hasAccess('write', 'owner')).toBe(false);
   });
 
   test('read does NOT satisfy write requirement (REFUSAL: read cannot create cards)', () => {
     expect(hasAccess('read', 'write')).toBe(false);
+  });
+
+  test('read does NOT satisfy admin requirement (REFUSAL)', () => {
+    expect(hasAccess('read', 'admin')).toBe(false);
   });
 
   test('read does NOT satisfy owner requirement (REFUSAL)', () => {
@@ -513,5 +541,112 @@ describe('GET /api/public/boards/:listId — unauthenticated boundary', () => {
     expect(firstExternalSelect).toBeGreaterThan(-1);
     expect(externalIsNull).toBeGreaterThan(-1);
     expect(firstExternalSelect).toBeLessThan(externalIsNull);
+  });
+});
+
+// ── 13. PUT /api/lists/:listId — admin access gate ──────────────────────
+
+describe('PUT /api/lists/:listId requires admin access', () => {
+  const body = extractRouteBody(serverSrc, 'put', '/api/lists/:listId');
+
+  test('gates with hasAccess(access, admin)', () => {
+    expect(body).toContain("hasAccess(access, 'admin')");
+  });
+
+  test('calls listAccess before the gate', () => {
+    const accessIdx = body.indexOf('listAccess(');
+    const gateIdx = body.indexOf("hasAccess(access, 'admin')");
+    expect(accessIdx).toBeGreaterThan(-1);
+    expect(accessIdx).toBeLessThan(gateIdx);
+  });
+});
+
+// ── 14. Share endpoints — admin access gate ─────────────────────────────
+
+describe('share endpoints require admin access', () => {
+  test("GET /api/lists/:listId/shares guards with hasAccess(access, 'admin')", () => {
+    const body = extractRouteBody(serverSrc, 'get', '/api/lists/:listId/shares');
+    expect(body).toContain("hasAccess(access, 'admin')");
+  });
+
+  test("POST /api/lists/:listId/shares guards with hasAccess(access, 'admin')", () => {
+    const body = extractRouteBody(serverSrc, 'post', '/api/lists/:listId/shares');
+    expect(body).toContain("hasAccess(access, 'admin')");
+  });
+
+  test("DELETE /api/lists/:listId/shares/:pubkey guards with hasAccess(access, 'admin')", () => {
+    const body = extractRouteBody(serverSrc, 'delete', '/api/lists/:listId/shares/:pubkey');
+    expect(body).toContain("hasAccess(access, 'admin')");
+  });
+
+  test('POST shares accepts admin as a valid permission value', () => {
+    const body = extractRouteBody(serverSrc, 'post', '/api/lists/:listId/shares');
+    expect(body).toContain("'admin'");
+  });
+});
+
+// ── 15. Transfer ownership — owner-only, structural ─────────────────────
+
+describe('transfer ownership endpoint', () => {
+  const body = extractRouteBody(serverSrc, 'post', '/api/lists/:listId/transfer');
+
+  test('route is registered', () => {
+    expect(body).not.toBeNull();
+  });
+
+  test("guards with hasAccess(access, 'owner')", () => {
+    expect(body).toContain("hasAccess(access, 'owner')");
+  });
+
+  test('does not accept admin (owner-only)', () => {
+    // The transfer gate must require owner, not admin.
+    expect(body).not.toContain("hasAccess(access, 'admin')");
+  });
+
+  test('validates target pubkey format', () => {
+    expect(body).toContain('[0-9a-f]{64}');
+  });
+
+  test('prevents self-transfer', () => {
+    expect(body).toContain('Cannot transfer to yourself');
+  });
+
+  test('requires target to have an existing share', () => {
+    expect(body).toContain('Target must already have a share');
+  });
+
+  test('runs in a transaction (BEGIN/COMMIT)', () => {
+    expect(body).toContain('BEGIN');
+    expect(body).toContain('COMMIT');
+  });
+
+  test('demotes previous owner to admin', () => {
+    // The transaction must insert an admin share for the outgoing owner.
+    expect(body).toContain("'admin'");
+    expect(body).toContain('req.user.id');
+  });
+
+  test('transfers ownership by updating user_id', () => {
+    expect(body).toContain('UPDATE task_lists SET user_id');
+  });
+
+  test('has a ROLLBACK path', () => {
+    expect(body).toContain('ROLLBACK');
+  });
+});
+
+// ── 16. Self-resignation carve-out ──────────────────────────────────────
+
+describe('admin self-resignation carve-out', () => {
+  test('admin can remove their own admin share (pubkey === req.user.id bypasses owner gate)', () => {
+    const body = extractRouteBody(serverSrc, 'delete', '/api/lists/:listId/shares/:pubkey');
+    // The guard checks pubkey !== req.user.id, so matching pubkey is exempted.
+    expect(body).toContain('req.user.id');
+    // The guard must reference both the permission check AND the self-check.
+    const guardWindow = body.slice(
+      body.indexOf("Only the owner can remove admin shares") - 300,
+      body.indexOf("Only the owner can remove admin shares")
+    );
+    expect(guardWindow).toContain('pubkey !== req.user.id');
   });
 });

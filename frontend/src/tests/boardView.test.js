@@ -2,7 +2,7 @@
  * BoardView structural tests.
  *
  * BoardView is the Kanban board modal: it loads columns/cards from the API,
- * renders the horizontal column layout, and gates column CUD to owner-only
+ * renders the horizontal column layout, and gates column CUD to admin+
  * while card creation is write-accessible.
  *
  * Source-level structural tests matching the project's established pattern.
@@ -61,39 +61,30 @@ describe('board data loading', () => {
 // ── Access control ──────────────────────────────────────────────────────
 
 describe('access control', () => {
-  test('derives canWrite from access level', () => {
-    expect(src).toMatch(/canWrite\s*=\s*access\s*===\s*['"]owner['"]\s*\|\|\s*access\s*===\s*['"]write['"]/);
+  test('derives canWrite from access level (includes admin)', () => {
+    expect(src).toMatch(/canWrite\s*=\s*access\s*===\s*['"]owner['"]\s*\|\|\s*access\s*===\s*['"]admin['"]\s*\|\|\s*access\s*===\s*['"]write['"]/);
   });
 
-  test('derives isOwner from access level', () => {
-    expect(src).toMatch(/isOwner\s*=\s*access\s*===\s*['"]owner['"]/);
+  test('derives canAdmin from access level', () => {
+    expect(src).toMatch(/canAdmin\s*=\s*access\s*===\s*['"]owner['"]\s*\|\|\s*access\s*===\s*['"]admin['"]/);
   });
 
-  test('column creation is owner-only (not write)', () => {
-    // The "+ Column" button is gated by isOwner
-    const addColSection = src.slice(
-      src.indexOf('+ Column'),
-      src.indexOf('+ Column') + 200,
-    );
-    // Walk backwards to find the isOwner gate
+  test('column creation requires admin (not write)', () => {
+    // The "+ Column" button is gated by canAdmin
     const beforeAddCol = src.slice(
       Math.max(0, src.indexOf('+ Column') - 300),
       src.indexOf('+ Column'),
     );
-    expect(beforeAddCol).toContain('isOwner');
+    expect(beforeAddCol).toContain('canAdmin');
   });
 
-  test('column deletion is owner-only', () => {
-    // Delete button gated by isOwner
-    const deleteColRegion = src.slice(
-      src.indexOf('board-column-delete'),
-      src.indexOf('board-column-delete') + 300,
-    );
+  test('column deletion requires admin', () => {
+    // Delete button gated by canAdmin
     const beforeDeleteCol = src.slice(
       Math.max(0, src.indexOf('board-column-delete') - 200),
       src.indexOf('board-column-delete'),
     );
-    expect(beforeDeleteCol).toContain('isOwner');
+    expect(beforeDeleteCol).toContain('canAdmin');
   });
 
   test('card creation is gated by canWrite', () => {

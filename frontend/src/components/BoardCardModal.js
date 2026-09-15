@@ -14,8 +14,8 @@ function BoardCardModal({ card, columns, listId, access, apiCall, user, onClose,
   const [dirty, setDirty] = useState(false);
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
 
-  const canWrite = access === 'owner' || access === 'write';
-  const isOwner = access === 'owner';
+  const canWrite = access === 'owner' || access === 'admin' || access === 'write';
+  const canAdmin = access === 'owner' || access === 'admin';
 
   const loadComments = useCallback(async () => {
     try {
@@ -326,7 +326,7 @@ function BoardCardModal({ card, columns, listId, access, apiCall, user, onClose,
                 {saving ? 'Saving...' : 'Save Changes'}
               </button>
             )}
-            {isOwner && (
+            {canAdmin && (
               <button className="btn btn-danger btn-small" onClick={handleDelete}>
                 Delete Card
               </button>

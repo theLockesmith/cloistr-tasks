@@ -4,7 +4,7 @@ import BoardCardModal from './BoardCardModal';
 import { useCardContextMenu, CardContextMenu } from './CardContextMenu';
 import DragDropList from './DragDropList';
 import EditListModal from './EditListModal';
-import { isListOwner, canWriteList } from '../lib/accessHelpers';
+import { isListOwner, canAdminList, canWriteList } from '../lib/accessHelpers';
 
 function BoardView({ list, onClose, apiCall, user }) {
   const [columns, setColumns] = useState([]);
@@ -62,7 +62,8 @@ function BoardView({ list, onClose, apiCall, user }) {
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [onClose, selectedCard, addingCardColumnId, addingColumn, editingColumnId, showEditBoard]);
 
-  const canWrite = access === 'owner' || access === 'write';
+  const canWrite = access === 'owner' || access === 'admin' || access === 'write';
+  const canAdmin = access === 'owner' || access === 'admin';
   const isOwner = access === 'owner';
 
   // ── Column operations ────────────────────────────────────────────────
@@ -286,20 +287,20 @@ function BoardView({ list, onClose, apiCall, user }) {
           />
         ) : (
           <span
-            className={'board-column-name' + (isOwner ? ' editable' : '')}
+            className={'board-column-name' + (canAdmin ? ' editable' : '')}
             onDoubleClick={() => {
-              if (!isOwner) return;
+              if (!canAdmin) return;
               setEditingColumnId(column.id);
               setEditingColumnName(column.name);
             }}
-            title={isOwner ? 'Double-click to rename' : undefined}
+            title={canAdmin ? 'Double-click to rename' : undefined}
           >
             {column.name}
           </span>
         )}
 
         <span className="board-column-count">{(column.cards || []).length}</span>
-        {isOwner && (
+        {canAdmin && (
           <button
             className="board-column-delete"
             onClick={() => handleDeleteColumn(column.id)}
@@ -404,7 +405,7 @@ function BoardView({ list, onClose, apiCall, user }) {
               </div>
             </div>
             <div className="board-header-actions">
-              {isOwner && (
+              {canAdmin && (
                 <button
                   className="btn btn-secondary btn-small"
                   onClick={() => setShowEditBoard(true)}
@@ -413,7 +414,7 @@ function BoardView({ list, onClose, apiCall, user }) {
                   ⚙
                 </button>
               )}
-              {isOwner && (
+              {canAdmin && (
                 <button
                   className="btn btn-secondary btn-small"
                   onClick={() => setAddingColumn(true)}
@@ -426,7 +427,7 @@ function BoardView({ list, onClose, apiCall, user }) {
           </div>
 
           <div className="board-container">
-            {isOwner && columns.length > 1 ? (
+            {canAdmin && columns.length > 1 ? (
               <DragDropList
                 items={columns}
                 onReorder={handleReorderColumns}
@@ -508,7 +509,7 @@ function BoardView({ list, onClose, apiCall, user }) {
               label: 'Open card',
               onClick: () => setSelectedCard({ ...contextCard, _columnName: columns.find(c => c.id === contextCard._columnId)?.name }),
             },
-            ...(isOwner ? [
+            ...(canAdmin ? [
               { key: 'sep-2', separator: true },
               {
                 key: 'delete',

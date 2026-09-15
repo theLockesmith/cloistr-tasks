@@ -1,19 +1,27 @@
 /**
  * Pure access-level helpers for list sharing.
  *
- * GET /api/lists returns an `access` field per row: 'owner', 'write', or
- * 'read'.  These helpers centralise the checks so the components don't
- * repeat string comparisons and the logic is testable without a DOM.
+ * GET /api/lists returns an `access` field per row: 'owner', 'admin',
+ * 'write', or 'read'.  These helpers centralise the checks so the
+ * components don't repeat string comparisons and the logic is testable
+ * without a DOM.
+ *
+ * Hierarchy: read(1) < write(2) < admin(3) < owner(4).
  */
 
-/** The caller owns the list and can edit settings, delete it, manage shares. */
+/** The caller owns the list and can delete it or transfer ownership. */
 export function isListOwner(list) {
   return list?.access === 'owner';
 }
 
-/** The caller can modify tasks (toggle, create, reorder, edit). Owner implies write. */
+/** The caller can manage the list: rename, settings, shares, columns. Owner implies admin. */
+export function canAdminList(list) {
+  return list?.access === 'owner' || list?.access === 'admin';
+}
+
+/** The caller can modify tasks (toggle, create, reorder, edit). Admin and owner imply write. */
 export function canWriteList(list) {
-  return list?.access === 'owner' || list?.access === 'write';
+  return list?.access === 'owner' || list?.access === 'admin' || list?.access === 'write';
 }
 
 /** The list was shared TO this user (they are not the owner). */
