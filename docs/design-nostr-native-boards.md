@@ -1,54 +1,84 @@
 # Design: Nostr-Native Boards
 
-**Status:** DEFERRED. Operator ruled on 2026-09-14 that boards remain on PostgreSQL for now. This document stands as the plan for whenever Nostr-native boards are picked back up. It is not a current roadmap item.
-**Date:** 2026-09-12
+**Status:** Design for operator review.
+**Date:** 2026-09-16 (revised; original 2026-09-12)
 **Author:** cloistr-tasks session
+**Revision note:** Updated to address the 7 questions from coord task 2e04f911,
+fill ordering and multi-author gaps, and incorporate features shipped since the
+original (board tags, checklists, card filters).
 
-## Summary
+## Why this reversal is deliberate
 
-Move board data (columns, cards, comments) off PostgreSQL onto Nostr events.
-Personal tasks and habits stay in PostgreSQL, unchanged.
+The app's CLAUDE.md argues against Nostr-native storage under "Why Not
+Nostr-Native Storage?" with three reasons: losing query capabilities, adding
+complexity without proportional benefit, and using relays as dumb blob storage.
 
-This is a scope expansion of the board model shipped in migrations 011-014.
-It replaces the PostgreSQL storage layer for boards with signed Nostr events
-stored on relays, making boards portable across any Nostr client and
-removing the server as a single point of truth.
-
-The cost: the signer becomes a runtime dependency for boards, not just a
-login-time one. Every board write needs a signed event. Every private board
-read needs an active `nip44_decrypt` grant. The signer was previously fire-
-and-forget after the auth challenge; it is now load-bearing for the entire
-board session.
+Those reasons are not wrong. This design answers each one by name (see
+"Addressing the original objections" at the end). But the operator is
+overriding the conclusion, and for a reason that outweighs them: a productivity
+suite whose thesis is "you own your data and can leave with everything" cannot
+keep its task data in a private database that no other client can read.
 
 ## What moves, what stays
 
-| Data            | Today           | After                      |
-|-----------------|-----------------|----------------------------|
-| Personal tasks  | PostgreSQL      | PostgreSQL (no change)     |
-| Habits/routines | PostgreSQL      | PostgreSQL (no change)     |
-| User settings   | PostgreSQL      | PostgreSQL (no change)     |
-| Board structure  | PostgreSQL     | Nostr events               |
-| Board cards     | PostgreSQL      | Nostr events               |
-| Card comments   | PostgreSQL      | Nostr events (NIP-22)      |
-| Board access    | task_list_shares| Nostr event tags + grants  |
-| Labels          | PostgreSQL      | PostgreSQL (no change)     |
+| Data              | Today      | After              | Why                                    |
+|-------------------|------------|--------------------|----------------------------------------|
+| Board structure   | PostgreSQL | Nostr events       | Collaborative, portable, can be public |
+| Board cards       | PostgreSQL | Nostr events       | Same                                   |
+| Card comments     | PostgreSQL | Nostr events       | Same                                   |
+| Board tags        | PostgreSQL | Nostr events       | Board-scoped, collaborative            |
+| Card checklists   | PostgreSQL | Nostr events       | Card-scoped, collaborative             |
+| Board access      | task_list_shares | Event tags    | Replaced by member tags on board event |
+| Personal tasks    | PostgreSQL | PostgreSQL         | Private, query-heavy, no sharing       |
+| Habits/routines   | PostgreSQL | PostgreSQL         | Template/instance/reset-date model has no natural event equivalent |
+| User settings     | PostgreSQL | PostgreSQL         | Per-user, not collaborative            |
+| Labels (habits)   | PostgreSQL | PostgreSQL         | NIP-44 non-determinism breaks dedup (see migration 014 constraint) |
 
-The argument in README.md "Non-Goals" still holds for personal tasks: they
-are inherently private, query-heavy, and gain nothing from relay storage.
-Boards are different. They are collaborative, can be public, and portability
-across Nostr clients is the whole point of the Cloistr vision.
+The habit tracker stays in PostgreSQL. It is the operator's daily routine
+data, not shared, not public, and its template-instance-date model would be
+forced into events with no gain. Touching it requires a deliberate, separate
+decision.
 
-## Event model
+---
 
-All board events use parameterized replaceable kinds (NIP-33, kind 30000-
-39999 range) so updates replace previous versions atomically.
+## 1. Event model
+
+All board entities use parameterized replaceable events (NIP-33, kind
+30000-39999) except comments, which are regular events.
+
+### The multi-author problem and how this design handles it
+
+In Nostr, a parameterized replaceable event can only be replaced by the same
+pubkey + kind + d-tag. If user A creates a card, only user A can update it.
+But boards are collaborative: user B needs to move user A's card between
+columns, toggle checklist items, and assign tags.
+
+This design splits card data into two event kinds:
+
+- **Card content** (kind 30302): title, description, priority, due date,
+  checklist definitions. Signed by the card's author. Only the author can
+  edit these fields.
+- **Card state** (kind 30303): column assignment, sort key, assignee, tag
+  attachments, checklist toggle states. Signed by whoever last changed the
+  card's state. Any write-level collaborator can publish.
+
+For card state, the relay stores one 30303 event per (pubkey, d-tag) pair.
+When user A moves a card, then user B moves it, the relay holds both events.
+The application picks the one with the latest `created_at` across all pubkeys.
+This is last-write-wins at the application layer, not the protocol layer.
+
+**Concurrent edit trade-off:** If two collaborators update different aspects
+of the same card's state simultaneously (one moves it, one toggles a
+checklist item), the later event is a complete snapshot that overwrites the
+earlier one. The earlier change is lost. This is the same trade Nostr makes
+everywhere (last-write-wins on replaceable events). Mitigation: the UI shows
+a notification when a newer state event arrives from another pubkey, allowing
+the user to re-apply their change.
 
 ### Board definition: kind 30301
 
-A single replaceable event per board. The `d` tag is the board's stable
-identifier. Columns are embedded as ordered tags because boards rarely have
-more than 3-10 columns, and embedding them makes column reorder atomic with
-the board update.
+Signed by the board owner. Contains board metadata, column definitions, tag
+vocabulary, and the collaborator list.
 
 ```json
 {
@@ -58,9 +88,12 @@ the board update.
     ["title", "Sprint Board"],
     ["description", "Current sprint work"],
     ["visibility", "public"],
-    ["col", "<col-uuid>", "To Do", "#3b82f6", "0"],
-    ["col", "<col-uuid>", "In Progress", "#f59e0b", "1"],
-    ["col", "<col-uuid>", "Done", "#22c55e", "2"],
+    ["col", "<col-uuid>", "To Do", "#3b82f6"],
+    ["col", "<col-uuid>", "In Progress", "#f59e0b"],
+    ["col", "<col-uuid>", "Done", "#22c55e"],
+    ["tag", "<tag-uuid>", "bug", "#ef4444"],
+    ["tag", "<tag-uuid>", "feature", "#3b82f6"],
+    ["member", "<pubkey-hex>", "admin"],
     ["member", "<pubkey-hex>", "write"],
     ["member", "<pubkey-hex>", "read"]
   ],
@@ -68,49 +101,91 @@ the board update.
 }
 ```
 
-For private boards, `content` holds NIP-44 encrypted metadata and the
-`visibility` tag reads `"private"`. See the Encryption section.
+Columns are embedded as ordered tags. Column order is the tag order in the
+event. Adding, removing, or reordering columns means the owner publishes a
+new board event. This makes column reorder atomic with any other board
+metadata change.
 
-Column tags carry: uuid, display name, color (hex), sort order. Adding,
-removing, or reordering columns means publishing a new version of the board
-event.
+Board tags (the shared vocabulary from migration 016) are also embedded.
+Tag definitions are board-level (admin creates them), and the board event is
+the natural home.
 
-Member tags carry the pubkey and permission level (`read`, `write`). This
-replaces the `task_list_shares` table. The board owner is the event author.
+Member tags replace `task_list_shares`. Permission levels: `read`, `write`,
+`admin`. The `owner` level is implicit (the event's author pubkey). Only the
+owner can update the board event, so only the owner controls who has access.
+This matches the current model where only the owner can grant/revoke admin.
 
-### Board card: kind 30302
+**Who can update:** Owner only (they sign the event). This means an admin
+who wants to rename the board or add a column must ask the owner, either
+through the API (server requests the owner's signer) or by convention. For
+the fleet board, the fleet bridge IS the owner and is always online, so
+admin requests are served immediately.
 
-One replaceable event per card. The `d` tag is the card's stable identifier.
+### Card content: kind 30302
+
+Signed by the card author.
 
 ```json
 {
   "kind": 30302,
   "tags": [
     ["d", "<card-uuid>"],
-    ["a", "30301:<board-author-pubkey>:<board-uuid>"],
-    ["col", "<col-uuid>"],
-    ["title", "Fix login timeout"],
-    ["priority", "3"],
-    ["due", "2026-09-15"],
-    ["assignee", "<pubkey-hex>"],
-    ["sort", "5"],
-    ["external", "coord", "<coord-task-uuid>"]
+    ["a", "30301:<board-owner-pubkey>:<board-uuid>"],
+    ["external", "coord", "<coord-task-uuid>"],
+    ["checklist", "<item-uuid>", "Write migration SQL"],
+    ["checklist", "<item-uuid>", "Update access.js"],
+    ["checklist", "<item-uuid>", "Add tests"]
   ],
-  "content": "Card description as markdown"
+  "content": "{\"title\":\"Fix login timeout\",\"description\":\"Detailed description here\",\"priority\":3,\"due_date\":\"2026-09-15\"}"
 }
 ```
 
-The `a` tag (NIP-33 address reference) ties the card to its board. The `col`
-tag places it in a column. Moving a card between columns means publishing a
-new version with a different `col` tag.
+The `a` tag ties the card to its board. The `external` tag provides bridge
+idempotency (replaces the PostgreSQL unique index on external_source,
+external_id). Checklist item definitions (text and order) are tags on this
+event, controlled by the card author.
 
-For private boards, `title` moves into encrypted `content` and the public
-tag set shrinks to `d`, `a`, `col`, `sort` (enough for relay-side
-filtering without leaking card content).
+Content is JSON for structured fields. For private boards, this JSON is
+NIP-44 encrypted.
+
+**Who can update:** Card author only (they sign the event). Other
+collaborators edit card state (column, assignee, etc.) via kind 30303.
+
+### Card state: kind 30303
+
+Signed by whoever last changed the card's placement or collaborative state.
+
+```json
+{
+  "kind": 30303,
+  "tags": [
+    ["d", "30302:<card-author-pubkey>:<card-uuid>"],
+    ["a", "30301:<board-owner-pubkey>:<board-uuid>"],
+    ["col", "<col-uuid>"],
+    ["sort", "aK"],
+    ["assignee", "<pubkey-hex>"],
+    ["card-tag", "<tag-uuid>"],
+    ["card-tag", "<tag-uuid>"],
+    ["check-done", "<checklist-item-uuid>"],
+    ["check-done", "<checklist-item-uuid>"]
+  ],
+  "content": ""
+}
+```
+
+The d-tag is the card's event address, so all state events for the same
+card share a d-tag. The relay stores one per (pubkey, kind, d-tag). The
+application picks the latest across all pubkeys by `created_at`.
+
+`sort` uses fractional indexing (see Ordering below). `card-tag` tags list
+which board tags are attached. `check-done` tags list which checklist items
+are completed (absence = not done).
+
+**Who can update:** Any write-level collaborator.
 
 ### Card comment: kind 1111 (NIP-22)
 
-Standard comment events referencing the card.
+Regular events (not replaceable). Immutable once published.
 
 ```json
 {
@@ -125,291 +200,390 @@ Standard comment events referencing the card.
 }
 ```
 
-NIP-22 comments use uppercase tag letters (`K`, `E`, `A`) to reference the
-root content being commented on, following the standard. The optional
-`parent` tag enables threading (replacing the `parent_comment_id` column).
+NIP-22 comment conventions with uppercase tags for root references. The
+optional `parent` tag enables threading (replaces `parent_comment_id`).
 
-Comments are regular events, not replaceable. Deletion uses NIP-09 (kind 5
-deletion request). Tombstoning (clearing body, keeping thread structure) maps
-to publishing a replacement with empty content and a `deleted` tag.
+Deletion uses NIP-09 (kind 5 deletion request). Tombstoning (clearing body
+while preserving thread structure) is a kind 5 event: the relay may or may
+not honor it, so the application treats a deleted comment as "[deleted]"
+in the thread.
+
+Board-level comments (card_id IS NULL in current schema) use the board's
+event address instead of a card's in the `A` tag.
+
+---
+
+## 2. Ordering
+
+**Decision: fractional indexing.**
+
+The current schema uses `sort_order INTEGER`. Two clients reordering the same
+board concurrently is not a corner case; it is the fleet bridge and the
+operator on the same shared board. Integer sort order requires renumbering
+other items on insert, which means updating multiple events atomically.
+Nostr has no transactions.
+
+Fractional indexing uses lexicographically ordered strings. To insert between
+items with keys `"a"` and `"b"`, generate a key between them (e.g., `"aV"`).
+Each card's sort key lives in its own card-state event (kind 30303). No global
+order list exists to contend over.
+
+**Concurrent insert behavior:** Two clients inserting between the same two
+items each generate a different fractional key. Both events are accepted by
+the relay. Both cards appear in the gap, in the order their keys sort. No
+conflict, no data loss.
+
+**Concurrent reorder behavior:** If two clients reorder the same card
+simultaneously, each publishes a card-state event. Last-write-wins by
+`created_at`. One reorder is lost. This is acceptable: reordering the same
+card at the same instant is genuinely concurrent and one outcome must win.
+
+**Column ordering** stays as tag order in the board event (kind 30301).
+Column reorder is owner-only, so there is exactly one signer, and no
+concurrent-edit problem.
+
+**Library:** `fractional-indexing` (npm) or equivalent. Pure string
+generation, no runtime dependencies.
+
+---
+
+## 3. What Postgres becomes
+
+Postgres becomes a **read-side projection**: a queryable index rebuilt from
+events, not the record of truth.
+
+| Layer    | Role                                  | Authoritative? |
+|----------|---------------------------------------|----------------|
+| Relay    | Event storage, subscription delivery  | Yes            |
+| Postgres | Queryable index for filtering/search  | No (derived)   |
+| Client   | Decrypts, renders, publishes events   | N/A            |
+
+**What is derived (rebuildable from relay):**
+- Board metadata (name, description, columns, tags, members)
+- Card content (title, description, priority, due date, checklists)
+- Card state (column, sort key, assignee, tag attachments, checklist toggles)
+- Comments (body, threading, timestamps)
+- All access control (member tags on board events)
+
+**What is NOT derivable from events (stays authoritative in Postgres):**
+- Habit tracker data (task_lists with list_type != 'board', task_templates, tasks)
+- User settings
+- Per-user labels (NIP-44 dedup constraint)
+- JWT sessions and auth challenges
+
+**Rebuild-from-relay procedure:**
+1. Subscribe to all board events (kinds 30301, 30302, 30303, 1111) for the
+   known board addresses
+2. Truncate the board projection tables
+3. Re-ingest events in timestamp order, applying the same aggregation logic
+   the live subscription uses
+4. Verify counts match
+
+The server maintains the projection by subscribing to the relay via WebSocket
+(REQ filters on the board kinds). On startup, it does a full sync. During
+operation, it processes events as they arrive. The existing Express API
+continues to serve the frontend from the projection, so the frontend does not
+need to speak Nostr directly in Phase 1.
+
+---
+
+## 4. Query
+
+The CLAUDE.md objection is correct: relays cannot filter encrypted content.
+
+### Public boards
+
+Relay-side filtering works for structured queries:
+- By board: filter on `#a` tag (board address)
+- By column: filter on `#col` tag
+- By author/assignee: filter on pubkey or `#assignee` tag
+- By kind: 30302 for cards, 1111 for comments
+
+Complex queries (full-text search across titles and descriptions, multi-field
+filters like "assignee X in column Y with tag Z") run against the Postgres
+projection. The relay is the record; Postgres is the search index.
+
+Card filters already shipped (text/assignee/opener/tag, with URL state for
+shareable views). These continue to work against the projection unchanged.
+
+### Private boards
+
+Events are encrypted. The relay stores opaque blobs. Two options:
+
+**Option A: Server-side projection (requires key custody).**
+The server holds a signer grant or a board-specific decryption key. It
+decrypts incoming events, writes plaintext into the projection, and serves
+queries from there. Filtering, search, and the board views work exactly as
+they do today.
+
+Cost: the server can read all private board content. This is the custody
+model the app was built to avoid.
+
+**Option B: Client-side decryption (no custody, limited query).**
+The browser holds the signer (NIP-07 or NIP-46). It subscribes to the relay
+directly, decrypts events, and builds a local index (IndexedDB or in-memory).
+Filtering happens client-side. The server never sees plaintext.
+
+Cost: no server-side notifications, no server-side search across boards,
+slower initial load (decrypt every event on open). The bridge cannot read
+private boards it does not own (it has no grant for the operator's key).
+
+**Recommendation:** Option B for user-owned private boards (preserves the
+security model), Option A only if the operator explicitly authorizes server-
+side custody. For the fleet board specifically, the bridge owns it and can
+decrypt its own events locally, so Option A applies naturally without
+additional custody grants.
+
+---
+
+## 5. Sharing
+
+Current model: `task_list_shares(list_id, pubkey, permission)` with
+`listAccess()` resolving the caller's level.
+
+Nostr model: `member` tags on the board event (kind 30301) carry pubkey and
+permission level. The board owner controls the member list by publishing
+updated board events.
+
+| Operation                  | PostgreSQL                        | Nostr                                  |
+|----------------------------|-----------------------------------|----------------------------------------|
+| Grant read                 | INSERT into task_list_shares      | Owner adds `["member", pubkey, "read"]` tag |
+| Grant write                | INSERT with permission='write'    | Owner adds `["member", pubkey, "write"]` tag |
+| Grant admin                | INSERT with permission='admin'    | Owner adds `["member", pubkey, "admin"]` tag |
+| Revoke                     | DELETE from task_list_shares      | Owner publishes without that member tag |
+| Check access               | listAccess() SQL join             | Client checks: am I author or in a member tag? |
+| Transfer ownership         | UPDATE task_lists.user_id         | Current owner re-signs the board event from the new owner's key (requires coordination) |
+
+**Transfer ownership** is harder in Nostr than in Postgres. Changing the
+event author requires the new owner to sign a new board event with the same
+d-tag. The old owner cannot do this (wrong key). The transfer must be a
+two-step protocol: old owner publishes a "transfer-intent" event, new owner
+reads it and publishes the replacement board event. Until the new owner acts,
+the old board event is still the latest. This needs explicit design before
+implementation.
+
+**For the fleet board specifically:** The fleet bridge owns board 98. The
+operator has write access. Shipping admin changes the member tag to
+`["member", "<operator-pubkey>", "admin"]`. The bridge publishes the updated
+board event. No transfer needed.
+
+### Relay write whitelist (precondition)
+
+The hosted relay (`wss://relay.cloistr.xyz`) enforces a write whitelist.
+Only 5 pubkeys may publish events. A non-whitelisted user cannot create
+boards, cards, or comments on this relay.
+
+This design does not decide whether to widen the whitelist. That is a
+security-posture decision for the operator. It is named here as a
+precondition: Phase 1 is unreachable for any user not on the whitelist
+unless the policy changes. Coord task `6688f453` covers the same question
+from the threads side.
+
+---
+
+## 6. Migration
+
+### The two models do NOT move together
+
+The habit tracker (task_lists with list_type != 'board', task_templates,
+tasks, reset_date, create_todays_tasks) stays in Postgres. It is untouchable
+without a deliberate, separate operator decision. The board model moves to
+Nostr. The two coexist in the same database during transition (the habit
+tables are unaffected by changes to board tables).
+
+### Phase 1: Public boards on Nostr (no encryption)
+
+**Precondition:** Relay write whitelist widened for board users, OR an
+alternative relay is used.
+
+1. Add Nostr event publishing to board write operations (dual-write:
+   Postgres AND relay)
+2. Backend subscribes to relay events and keeps Postgres projection in sync
+3. Frontend reads from Postgres projection (unchanged API)
+4. Verify: projection matches direct relay queries for all board data
+5. Remove Postgres writes for boards (relay is now the record)
+6. Postgres board tables become projection-only (can be rebuilt from relay)
+
+During dual-write, Postgres is still authoritative. The relay is a copy.
+This is safe to revert at any point by stopping the event publishing.
+
+### Phase 2: Private boards on Nostr (requires signer grants)
+
+**Precondition:** Decision d41b70c3 resolved (signer custody for blanket
+nip44_decrypt grants).
+
+1. Integrate signer grant request into board UI (see Inherited findings)
+2. Encrypt card content for board members on publish
+3. Server-side or client-side decryption for the projection (see Query above)
+4. Handle grant lapse mid-session
+5. Remove Postgres storage for private boards
+
+### Existing data migration
+
+Live boards on production (including board 98, the fleet board) need to be
+exported as Nostr events and published to the relay. The migration script:
+
+1. Read each board from Postgres
+2. Build kind 30301 event (board metadata, columns, tags, members)
+3. Build kind 30302 events (card content) and kind 30303 events (card state)
+4. Build kind 1111 events (comments)
+5. Sign all events with the board owner's key (fleet key for fleet boards,
+   operator's key for operator boards)
+6. Publish to relay
+7. Verify the projection matches the original Postgres data
+
+The operator's boards require their signer to sign the migration events.
+This is a one-time operation.
+
+---
+
+## 7. Fleet writes
+
+The bridge currently writes via HTTP API with its own pubkey. Under the
+Nostr model, it signs events with the fleet key. This is cleaner: each event
+has a cryptographically verifiable author.
+
+The bridge holds its own key (generated by `fleet_tasks.py newkey`, mode
+0600). It has no connection to coldforge-signer. It owns its boards and
+shares them with the operator. This shape does not change.
+
+**What changes for the bridge (coord task f7805d36):**
+- Writes become `sign event + publish to relay` instead of `HTTP POST to API`
+- Idempotency uses NIP-33 replaceable semantics (same kind + d-tag = replacement)
+  instead of PostgreSQL's `ON CONFLICT` on the external index
+- The deterministic d-tag for bridged cards is `coord:<task-uuid>`
+- Comment events are regular (kind 1111), so dedup uses the external tag
+  convention rather than replaceable semantics
+- The `author_label` column (session role tag for provenance) becomes a tag
+  on the comment event
+
+**What does NOT change:**
+- The bridge signs with its own key (no signer grants)
+- The bridge owns the fleet board (no transfer)
+- The bridge has no access to the operator's key
+- A read-only display name for the bridge ("Fleet") comes from a profile
+  event (kind 0) published by the fleet key, which any Nostr client can
+  resolve
+
+---
 
 ## Encryption model (private boards)
 
-Private boards use NIP-44 v2 encryption. The board owner encrypts content
-for each member individually. This creates O(members) sealed copies per
-event, which is acceptable for boards (typically 2-20 members, not hundreds).
+Unchanged from the original design. Summary:
 
-### What is encrypted vs. what stays public
+Private boards use NIP-44 v2 encryption. Content fields (title, description,
+comment body) are encrypted per-member. Structural tags (d-tag, column, sort
+key) stay public for relay-side filtering.
 
-| Field              | Public board | Private board          |
-|--------------------|-------------|------------------------|
-| Event kind         | Public      | Public                 |
-| `d` tag (uuid)     | Public      | Public                 |
-| `a` tag (board ref)| Public      | Public                 |
-| `col` tag          | Public      | Public                 |
-| `sort` tag         | Public      | Public                 |
-| `title` tag        | Public      | Encrypted (in content) |
-| `description`      | Public      | Encrypted (in content) |
-| `content`          | Public      | Encrypted              |
-| `member` tags      | Public      | Public (pubkeys only)  |
-| `assignee` tag     | Public      | Public (pubkey only)   |
+### Metadata leakage
 
-The encrypted content payload is a JSON object:
+"Private" seals the prose but publishes the work state machine: how many
+cards, which column each sits in, who is assigned, when cards moved. For the
+fleet board specifically, the deterministic d-tag `coord:<task-uuid>`
+publishes the coord task UUID in the clear.
 
-```json
-{
-  "title": "Fix login timeout",
-  "description": "Card description as markdown",
-  "meta": {}
-}
-```
-
-This means a relay can still filter private board cards by board, column,
-and sort order, but cannot see what the cards say. Member pubkeys are visible
-(the relay knows who participates) but the work content is sealed.
-
-### Metadata leakage on private boards
-
-"Private" in this model seals the prose but publishes the work state
-machine. The public tags on a private board, taken together, reveal:
-
-- **How many cards exist** (count of kind 30302 events with the board's
-  `a` tag)
-- **Which column each card sits in** (`col` tag), and when it moved
-  (event `created_at` on each replacement)
-- **Which pubkey is assigned** (`assignee` tag)
-- **When each card was created, updated, or finished**
-
-For the fleet bridge specifically, the deterministic `d` tag
-`coord:<task-uuid>` publishes the coord task UUID in the clear,
-permanently, on a world-readable relay. The UUID is opaque and carries no
-user content, but it cross-references the coord system and allows
-enumeration of the fleet's entire task set.
-
-This is a different trade from the one the word "private" implies. It may
-be acceptable, but the operator should make it knowingly. The standing
-position is that the fleet's own size and tempo are not published to a
-world-readable relay without explicit authorization; the presence roster
-is OFF today for exactly that reason.
-
-**No clean fix exists.** Sealing the `d` tag is ruled out by migration 014
-(NIP-44 non-determinism breaks replaceable-event dedup). A keyed digest
-(HMAC of the coord UUID under a board secret) would keep replacement
-semantics while removing the cross-reference to coord, but it does nothing
-about `col`, `sort`, `assignee`, or the count. State the trade; do not
-engineer around it.
+No clean fix exists. The operator should make this trade knowingly.
 
 ### Signer grant lifecycle
 
-Reading a private board requires an active `nip44_decrypt` grant from
-coldforge-signer. Writing requires `sign_event`. A read-only board viewer
-needs only decrypt, not signing.
+Reading a private board requires an active `nip44_decrypt` grant. Writing
+requires `sign_event`. See the Inherited findings in the original design for
+the three measured constraints (wildcard grants are silent, client session has
+no expiry awareness, SQLite storage has no expiry enforcement).
 
-The grant shape that ships today:
+### THIS IS d41b70c3 AGAIN
 
-```
-POST /api/v1/requests/{request_id}/approve
-{"methods": ["nip44_decrypt"], "remember": true, "expires_at": "<RFC3339>"}
-```
+Private tasks as Nostr events must be encrypted. Encrypted means a signer
+must decrypt them, routinely, in a browser, for every board the user opens.
+The operator has also asked for public boards, which are the easy half.
 
-Method scope is enforced in the signer (`isMethodAllowed`). Expiry is
-enforced in the PostgreSQL storage layer (production path).
+This design does NOT assume the custody question is settled. Public boards
+ship first (Phase 1). Private boards are gated on d41b70c3.
 
-**UI implications:**
+---
 
-1. **On board open**, if no active grant exists, prompt the user to approve
-   a scoped grant. Default to `nip44_decrypt` only for viewers,
-   `nip44_decrypt` + `sign_event` for writers.
+## Addressing the original objections
 
-2. **Grant lapse mid-session.** The client session type has no expiry field
-   and nothing compares it to the current time. A browser holding a scoped
-   grant will not notice it lapsing; it will just start getting refusals
-   from the signer. The board UI must handle this: catch decrypt/sign
-   failures, surface a re-authorization prompt, and avoid losing unsaved
-   card edits. A countdown or "grant expires in X" indicator is worth
-   building but not required for launch.
+The CLAUDE.md lists three costs of Nostr-native storage. Each one is real.
 
-3. **Default grant duration.** Suggest 8 hours for interactive sessions.
-   The fleet bridge (coord mirror) should use shorter grants, scoped per
-   sync run.
+### "Lose query capabilities"
 
-## Inherited findings
+**True for encrypted events, not for public ones.** For public boards,
+relay-side filtering handles structured queries (by board, column, author,
+assignee). Complex queries (full-text search, multi-field filters) run
+against the Postgres projection, which is derived from events and
+rebuildable. The same queries work; the data flows through a relay first.
 
-These are from the signer grant audit (d41b70c3, completed 2026-09-06) and
-the follow-up probe by conscience-cloistr-ops (2026-09-07). They are stated
-as inherited measurements, not this session's own verification. Nobody has
-yet minted a scoped expiring grant and driven a real decrypt through it end
-to end. What is measured is that the mint path accepts those fields and both
-enforcement points are in the deployed source.
+For private boards, the relay cannot filter encrypted content. Queries must
+happen client-side (after decryption) or against a server-side projection
+(which requires custody). This cost is real and is the reason private boards
+are Phase 2.
 
-1. **Wildcard grants are silent.** Both `["*"]` and `["all"]` are treated as
-   method wildcards by the signer. A carelessly minted grant is blanket with
-   no warning. The board UI must always enumerate methods explicitly
-   (`["nip44_decrypt"]` or `["nip44_decrypt", "sign_event"]`), never pass a
-   wildcard. A lint or assertion in the grant request code is warranted.
+### "Add complexity without proportional benefit"
 
-2. **Client session has no expiry awareness.** The signer's client session
-   type has no `expires_at` field and no comparison against current time.
-   The browser will not know a grant has lapsed until it tries to use it and
-   gets refused. Design the board's error handling for this: catch the
-   refusal, show a re-auth prompt, preserve any in-progress card edits in
-   local state while the user re-authorizes.
+**The complexity is real.** Event aggregation (multiple events per card),
+concurrent-edit resolution (last-write-wins on state events, fractional
+indexing for ordering), the projection layer, and encryption for private
+boards are all genuinely harder than SQL.
 
-3. **SQLite storage path has no expiry enforcement.** The PostgreSQL storage
-   backend (production path) checks expiry. The SQLite backend does not.
-   This is not the production path today, but it is a trapdoor: if the
-   storage backend ever changes, grants that should have expired will not.
-   This is documented here so it is not rediscovered later as a bug.
+**The benefit changed.** The operator stated it: data portability. A user can
+export their boards by subscribing to their events. Any Nostr client can read
+a public board. The user's data is not locked in a single app's database.
+That is the product's thesis applied to its own task data, and the operator
+has decided the complexity is worth paying.
 
-## Access control translation
+### "Use relays as dumb blob storage"
 
-Current PostgreSQL model:
+**True for encrypted private boards.** The relay stores opaque blobs and can
+only filter by structural tags (d-tag, kind, pubkey).
 
-| Concept       | PostgreSQL                                    |
-|---------------|-----------------------------------------------|
-| Ownership     | `task_lists.user_id = pubkey`                 |
-| Share grant   | `task_list_shares(list_id, pubkey, permission)`|
-| Check         | `listAccess()` in `lib/access.js`             |
+**Not true for public boards.** The relay stores structured events with
+meaningful tags. It can filter, deliver subscriptions, and enable
+interoperability with other Nostr clients. This is relay storage working as
+designed.
 
-Nostr-native model:
+The split model (public boards = Nostr-native in Phase 1, private boards =
+Phase 2 after d41b70c3) minimizes the "dumb blob" case to the scenario
+where encryption is genuinely necessary.
 
-| Concept       | Nostr                                          |
-|---------------|------------------------------------------------|
-| Ownership     | Event author pubkey                            |
-| Share grant   | `member` tags on the board event               |
-| Check         | Client-side: am I the author or in a member tag?|
+---
 
-For public boards, any client can read the events from any relay. For
-private boards, a client needs the decrypt grant, so access is enforced
-cryptographically rather than by server-side row checks.
+## Sequencing recommendation
 
-### Write whitelist (PRECONDITION for Phase 1)
+I agree with the task's suggested order: finish board features in Postgres
+first, then move the record underneath.
 
-The hosted relay (`wss://relay.cloistr.xyz`) does NOT accept any signed
-event. It enforces a write whitelist: only pubkeys listed in
-`WRITE_WHITELIST_PUBKEYS` (ConfigMap `cloistr-relay-config`, namespace
-`cloistr`) may publish events. As of 2026-09-12, five pubkeys are
-whitelisted. A non-whitelisted key gets:
+1. **Now:** This design document, for the operator to review and rule on.
+2. **Continue:** Board feature development in Postgres (the event model is
+   designed to match the Postgres schema's shape, so features built now will
+   map cleanly onto events later).
+3. **When features stabilize:** Implement Phase 1 (public boards on Nostr,
+   dual-write, projection).
+4. **When d41b70c3 resolves:** Implement Phase 2 (private boards on Nostr,
+   encrypted events, signer grants).
 
-    restricted: your pubkey is not on the whitelist
+Building the Nostr layer before the feature set is settled means designing
+an event model for a product that is still moving. The current feature
+velocity (6 items shipped in one session: tags, checklists, filters,
+markdown, expandable comments, drag-and-drop) argues for finishing first.
 
-Measured on production by cloistr-ops (`client_probe.py`, 2026-09-12)
-with a control publish from the fleet key succeeding in the same run.
-Source: `cloistr-config` origin/main, `base/relay/configmap-relay.yaml:34`,
-deployed revision c47dcaa, app Synced and Healthy with automated selfHeal.
+---
 
-This means under the Nostr-native model, a user who is not one of those
-five keys cannot create a board, add a card, or post a comment on the
-hosted relay. Phase 1 ("public boards, no encryption") is unreachable for
-any user not on the whitelist unless the write policy is widened.
+## Open questions for the operator
 
-**This design does not decide the policy change.** Widening relay write
-policy is a security-posture decision belonging to cloistr-orchestrator
-and the operator. It is named here as a precondition so Phase 1 is not
-built and then discovered to be unreachable. A related decision request
-(coord `6688f453`) is open from the threads side, making this the second
-consumer blocked behind the same write-policy question.
+1. **Relay write policy.** Phase 1 is unreachable for non-whitelisted users.
+   Widen the whitelist, or accept that only whitelisted keys can create
+   boards on the hosted relay?
 
-Write access for authorized pubkeys is enforced by the relay's write
-whitelist today. The board owner's client should additionally filter
-displayed cards to only those from `member`-tagged pubkeys, as a defense
-against a whitelisted key publishing unauthorized cards.
+2. **Private board metadata trade.** Is publishing task count, column
+   distribution, movement timestamps, and assignee pubkeys on a world-
+   readable relay acceptable for "private" boards? No technical fix exists.
 
-## Fleet bridge (coord mirror)
+3. **Transfer ownership protocol.** The Nostr model makes ownership transfer
+   a two-step key-coordination exercise. Is this acceptable, or should
+   transfer be dropped from the Nostr-native model?
 
-The current board model has `external_id` and `external_source` columns for
-bridging coord tasks onto board cards. In the Nostr-native model, the
-`external` tag on card events serves the same purpose. The bridge writes
-signed events instead of HTTP API calls.
-
-The bridge holds its OWN account key (generated by `fleet_tasks.py newkey`,
-mode 0600), and signs locally. It has no connection to coldforge-signer: no
-token, no grant, no access to the operator's identity. It OWNS its board
-and SHARES it with the operator at `write`. This shape was adopted on
-2026-09-09 when list sharing deployed: identical capability, strictly less
-authority, revocation is a DELETE the operator performs from their own app.
-
-Under the Nostr-native model nothing about that has to change. The fleet
-key signs its own board and card events. It is already on the relay's write
-whitelist (3331f3b0..., added 2026-09-06 under coord 450a4639). For a
-private board the fleet is the AUTHOR, so it encrypts to each member with
-its own key by ECDH, locally. Zero signer involvement in either direction.
-
-**The bridge must NOT be given a signer grant.** Doing so would re-couple
-fleet operation to the operator's key custody, which is precisely what the
-sharing model was adopted to avoid, and it would add a runtime dependency
-on a service the mirror does not touch today.
-
-Idempotency changes: instead of PostgreSQL's `ON CONFLICT` on the external
-index, the bridge publishes replaceable events with a deterministic `d` tag
-derived from the external source and ID (e.g., `coord:<task-uuid>`). NIP-33
-replaceable event semantics handle dedup: same author + same kind + same `d`
-tag = replacement, not duplicate.
-
-## Migration path
-
-### Phase 1: Public boards on Nostr (no encryption needed)
-
-**Precondition:** The relay write whitelist must be widened to admit board
-users, or an alternative write path must exist. Without this, Phase 1 is
-unreachable for everyone except five whitelisted pubkeys. This is a
-security-posture decision, not a code change. See Access Control above.
-
-1. Add event publishing to write operations (create board, add card, etc.)
-2. Backend publishes Nostr events alongside PostgreSQL writes (dual-write)
-3. Frontend reads from relay, falls back to API
-4. Once stable, remove PostgreSQL reads for boards
-5. Remove PostgreSQL writes for boards (API becomes relay-only)
-
-### Phase 2: Private boards on Nostr (requires grant integration)
-
-1. Integrate signer grant request flow into board UI
-2. Encrypt board content for members on publish
-3. Decrypt on read using active grant
-4. Handle grant lapse (finding #2)
-5. Remove PostgreSQL storage for private boards
-
-### Fallback
-
-"Ship public boards first, private later" remains available. Public boards
-need no encryption, no grants, and no signer coupling beyond event signing
-(which the auth flow already proves works). This is the lower-risk path and
-can ship independently.
-
-## What this does NOT cover
-
-- **Personal tasks/habits**: stay in PostgreSQL, per README.md rationale
-- **Labels**: stay in PostgreSQL (dedup constraint, NIP-44 non-determinism;
-  see migration 014 and CLAUDE.md "Known Constraints")
-- **User settings**: stay in PostgreSQL
-- **NIP-55 (Android signer)**: future work, not blocking
-- **Relay selection/NIP-65**: separate task (6037876c)
-- **End-to-end verification of scoped grants**: nobody has driven a real
-  scoped decrypt through the full path yet. This design assumes the mint
-  and enforcement work as the source reads, but that must be verified before
-  Phase 2 implementation begins.
-
-## Open questions
-
-1. **Event kind numbers.** 30301/30302 are placeholders. Should we register
-   these with the NIP process, or use the unregistered application-specific
-   range? Cloistr's relay can accept any kind; interop with other clients
-   matters only if we want boards to be a protocol, not just a feature.
-
-2. **Column-in-board vs. column-as-event.** This design embeds columns as
-   tags in the board event. The tradeoff: column reorder is atomic but
-   every column change republishes the entire board event. For boards with
-   many members getting notifications, this may be noisy. An alternative is
-   separate column events (kind 30303 or similar), but then column ordering
-   requires reading multiple events and reconciling.
-
-3. ~~**Relay write policy for private boards.**~~ ANSWERED by production
-   measurement: the relay already enforces a write whitelist. The question
-   is not whether to add write restrictions but whether to WIDEN them for
-   board users. That decision is with cloistr-orchestrator and the operator
-   (coord `6688f453` and the precondition noted in Access Control above).
-
-4. **Private board metadata trade.** The operator must decide whether
-   publishing task count, column distribution, movement timestamps, and
-   assignee pubkeys on a world-readable relay is acceptable for "private"
-   boards. See Metadata leakage section. No clean technical fix exists.
+4. **Event kind registration.** 30301/30302/30303 are application-specific
+   placeholders. Register them as a NIP if boards should be a protocol
+   (interoperable with other clients), or keep them internal if boards are
+   just a feature.
