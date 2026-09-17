@@ -1,4 +1,11 @@
 import React, { useState, useEffect } from 'react';
+import {
+  isPushSupported,
+  getPermissionState,
+  getActiveSubscription,
+  subscribeToPush,
+  unsubscribeFromPush,
+} from '../lib/push';
 
 function UserSettings({ onClose, apiCall, userSettings, setUserSettings, onSettingsUpdate }) {
   const [localSettings, setLocalSettings] = useState({
@@ -19,6 +26,29 @@ function UserSettings({ onClose, apiCall, userSettings, setUserSettings, onSetti
   const [icalToken, setIcalToken] = useState(null);
   const [icalLoading, setIcalLoading] = useState(false);
   const [icalCopied, setIcalCopied] = useState(false);
+
+  // Push notifications (board activity): separate from the
+  // localSettings.notificationBrowser preference above, which is just a
+  // stored flag. This tracks the ACTUAL browser subscription state —
+  // Notification permission + an active PushSubscription — since that's
+  // what determines whether notifications will really arrive.
+  const [pushSupported] = useState(isPushSupported());
+  const [pushPermission, setPushPermission] = useState(getPermissionState());
+  const [pushEnabled, setPushEnabled] = useState(false);
+  const [pushLoading, setPushLoading] = useState(false);
+  const [pushError, setPushError] = useState(null);
+
+  useEffect(() => {
+    if (!pushSupported) return;
+    (async () => {
+      try {
+        const sub = await getActiveSubscription();
+        setPushEnabled(!!sub);
+      } catch (e) {
+        console.error('Error checking push subscription state:', e);
+      }
+    })();
+  }, [pushSupported]);
 
   // Update local settings when userSettings prop changes
   useEffect(() => {
@@ -143,6 +173,36 @@ function UserSettings({ onClose, apiCall, userSettings, setUserSettings, onSetti
       alert('Error revoking feed URL');
     } finally {
       setIcalLoading(false);
+    }
+  };
+
+  const handleEnablePush = async () => {
+    setPushLoading(true);
+    setPushError(null);
+    try {
+      await subscribeToPush(apiCall);
+      setPushEnabled(true);
+      setPushPermission(getPermissionState());
+    } catch (e) {
+      console.error('Error enabling push notifications:', e);
+      setPushError(e.message || 'Failed to enable push notifications');
+      setPushPermission(getPermissionState());
+    } finally {
+      setPushLoading(false);
+    }
+  };
+
+  const handleDisablePush = async () => {
+    setPushLoading(true);
+    setPushError(null);
+    try {
+      await unsubscribeFromPush(apiCall);
+      setPushEnabled(false);
+    } catch (e) {
+      console.error('Error disabling push notifications:', e);
+      setPushError(e.message || 'Failed to disable push notifications');
+    } finally {
+      setPushLoading(false);
     }
   };
 
@@ -365,6 +425,40 @@ function UserSettings({ onClose, apiCall, userSettings, setUserSettings, onSetti
                 />
                 Browser notifications
               </label>
+            </div>
+
+            <div className="form-group">
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={pushEnabled}
+                  disabled={!pushSupported || pushLoading || pushPermission === 'denied'}
+                  onChange={(e) => {
+                    if (e.target.checked) {
+                      handleEnablePush();
+                    } else {
+                      handleDisablePush();
+                    }
+                  }}
+                />
+                Push notifications for board activity
+              </label>
+              {!pushSupported && (
+                <small>Push notifications are not supported in this browser.</small>
+              )}
+              {pushSupported && pushPermission === 'denied' && (
+                <small style={{ color: 'var(--text-secondary)' }}>
+                  Notifications are blocked for this site. Allow them in your browser's site settings to enable this.
+                </small>
+              )}
+              {pushSupported && pushPermission !== 'denied' && (
+                <small>
+                  Get notified in your browser when a shared board gets a new card, a card is moved, or a comment is added.
+                </small>
+              )}
+              {pushError && (
+                <small style={{ color: 'var(--danger, #d33)' }}>{pushError}</small>
+              )}
             </div>
           </div>
 
