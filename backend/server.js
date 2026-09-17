@@ -36,6 +36,21 @@ function fieldTooLong(value, field, limit) {
   return null;
 }
 
+// ── Board activity log ──────────────────────────────────────────────────
+// Called inline from route handlers, after the DB operation they're
+// recording has already succeeded. Never throws: a logging failure must
+// not fail the request that triggered it.
+async function logActivity(listId, cardId, actorPubkey, action, detail) {
+  try {
+    await pool.query(`
+      INSERT INTO board_activity (list_id, card_id, actor_pubkey, action, detail)
+      VALUES ($1, $2, $3, $4, $5)
+    `, [listId, cardId, actorPubkey, action, detail ?? null]);
+  } catch (error) {
+    console.error('Error logging board activity:', error);
+  }
+}
+
 const app = express();
 const port = process.env.PORT || 3000;
 
@@ -1589,7 +1604,10 @@ app.post('/api/boards/:listId/cards', authenticateToken, async (req, res) => {
       emptyToNull(externalId), emptyToNull(externalSource),
     ]);
 
-    res.status(201).json({ ...result.rows[0], access });
+    const card = result.rows[0];
+    await logActivity(listId, card.id, req.user.id, 'card_created', `Created card "${card.title}"`);
+
+    res.status(201).json({ ...card, access });
   } catch (error) {
     // Handle unique constraint on (external_source, external_id) for idempotency.
     if (error.code === '23505' && error.constraint === 'idx_board_cards_external') {
@@ -1662,7 +1680,7 @@ app.post('/api/boards/:listId/cards/:cardId/move', authenticateToken, async (req
 
     // Verify target column belongs to this board.
     const colCheck = await pool.query(
-      'SELECT id FROM board_columns WHERE id = $1 AND list_id = $2',
+      'SELECT id, name FROM board_columns WHERE id = $1 AND list_id = $2',
       [columnId, listId],
     );
     if (colCheck.rows.length === 0) return res.status(400).json({ error: 'Target column not found on this board' });
@@ -1684,7 +1702,14 @@ app.post('/api/boards/:listId/cards/:cardId/move', authenticateToken, async (req
     `, [columnId, sortVal, cardId, listId]);
 
     if (result.rows.length === 0) return res.status(404).json({ error: 'Card not found' });
-    res.json(result.rows[0]);
+
+    const card = result.rows[0];
+    await logActivity(
+      listId, card.id, req.user.id, 'card_moved',
+      `Moved card "${card.title}" to "${colCheck.rows[0].name}"`,
+    );
+
+    res.json(card);
   } catch (error) {
     console.error('Error moving card:', error);
     res.status(500).json({ error: 'Failed to move card' });
@@ -1699,11 +1724,18 @@ app.delete('/api/boards/:listId/cards/:cardId', authenticateToken, async (req, r
     if (!hasAccess(access, 'admin')) return res.status(403).json({ error: 'Card deletion requires admin access' });
 
     const result = await pool.query(
-      'DELETE FROM board_cards WHERE id = $1 AND list_id = $2 RETURNING id',
+      'DELETE FROM board_cards WHERE id = $1 AND list_id = $2 RETURNING id, title',
       [cardId, listId],
     );
 
     if (result.rows.length === 0) return res.status(404).json({ error: 'Card not found' });
+
+    // card_id must be NULL here: the row we'd reference no longer exists,
+    // and board_activity.card_id has a FK to board_cards. The title goes
+    // in the detail text instead.
+    const deleted = result.rows[0];
+    await logActivity(listId, null, req.user.id, 'card_deleted', `Deleted card "${deleted.title}"`);
+
     res.status(204).send();
   } catch (error) {
     console.error('Error deleting card:', error);
@@ -1768,7 +1800,13 @@ app.post('/api/boards/:listId/cards/:cardId/comments', authenticateToken, async 
       body.trim(), parentCommentId, emptyToNull(externalSource), emptyToNull(externalId),
     ]);
 
-    res.status(201).json({ ...result.rows[0], access });
+    const comment = result.rows[0];
+    await logActivity(
+      listId, cardId, req.user.id, 'comment_created',
+      comment.body.length > 140 ? comment.body.slice(0, 140) + '…' : comment.body,
+    );
+
+    res.status(201).json({ ...comment, access });
   } catch (error) {
     // Idempotent: duplicate external comment returns existing, but only
     // if it belongs to this card.  Otherwise 409 (prevents leaking a
@@ -1906,7 +1944,13 @@ app.post('/api/boards/:listId/comments', authenticateToken, async (req, res) => 
       emptyToNull(externalSource), emptyToNull(externalId),
     ]);
 
-    res.status(201).json({ ...result.rows[0], access });
+    const comment = result.rows[0];
+    await logActivity(
+      listId, null, req.user.id, 'comment_created',
+      comment.body.length > 140 ? comment.body.slice(0, 140) + '…' : comment.body,
+    );
+
+    res.status(201).json({ ...comment, access });
   } catch (error) {
     // Idempotent dedup, scoped to this board.  409 if the external id
     // collides with a comment on a different board (prevents leaking).
@@ -2308,6 +2352,30 @@ app.put('/api/boards/:listId/cards/:cardId/checklist-reorder', authenticateToken
   } catch (error) {
     console.error('Error reordering checklist:', error);
     res.status(500).json({ error: 'Failed to reorder checklist' });
+  }
+});
+
+// ── Board activity feed ─────────────────────────────────────────────────
+
+app.get('/api/boards/:listId/activity', authenticateToken, async (req, res) => {
+  try {
+    const { listId } = req.params;
+    const access = await listAccess(pool, listId, req.user.id);
+    if (!access) return res.status(404).json({ error: 'Board not found' });
+    if (!hasAccess(access, 'read')) return res.status(403).json({ error: 'Read access required' });
+
+    const result = await pool.query(`
+      SELECT id, list_id, card_id, actor_pubkey, action, detail, created_at
+      FROM board_activity
+      WHERE list_id = $1
+      ORDER BY created_at DESC
+      LIMIT 50
+    `, [listId]);
+
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching board activity:', error);
+    res.status(500).json({ error: 'Failed to fetch board activity' });
   }
 });
 

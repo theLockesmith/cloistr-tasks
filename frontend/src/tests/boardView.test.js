@@ -371,3 +371,94 @@ describe('checklist rollup', () => {
     expect(src).toContain('card.checklist.total');
   });
 });
+
+// ── Due-date indicator on card face ────────────────────────────────────
+
+describe('due-date indicator', () => {
+  test('renders nothing when the card has no due date', () => {
+    expect(src).toMatch(/card\.due_date\s*&&\s*\(\(\)\s*=>/);
+  });
+
+  test('overdue cards use the error color', () => {
+    const fdIdx = src.indexOf('const formatDate');
+    const fdBody = src.slice(fdIdx, fdIdx + 900);
+    expect(fdBody).toContain("'Overdue'");
+    expect(fdBody).toContain("color: 'var(--error)'");
+  });
+
+  test('cards due within 3 days use the warning color', () => {
+    const fdIdx = src.indexOf('const formatDate');
+    const fdBody = src.slice(fdIdx, fdIdx + 900);
+    expect(fdBody).toMatch(/diff\s*<=\s*3/);
+    expect(fdBody).toContain("color: 'var(--warning)'");
+  });
+
+  test('cards due later than 3 days use the subtle secondary color', () => {
+    const fdIdx = src.indexOf('const formatDate');
+    const fdBody = src.slice(fdIdx, fdIdx + 900);
+    expect(fdBody).toContain("color: 'var(--text-secondary)'");
+  });
+
+  test('renders a colored dot alongside the date text', () => {
+    expect(src).toContain('board-card-due-dot');
+  });
+});
+
+// ── Column card counts ──────────────────────────────────────────────────
+
+describe('column card counts', () => {
+  test('count is wrapped in parentheses next to the column name', () => {
+    expect(src).toContain("<span className=\"board-column-count\">({(column.cards || []).length})</span>");
+  });
+
+  test('count is derived live from the column.cards array (updates on add/move/delete via loadBoard)', () => {
+    // No separate counter state — it's always column.cards.length, so any
+    // loadBoard() refresh (after add/move/delete) reflects the new count.
+    expect(src).toMatch(/board-column-count[^]*?\(column\.cards\s*\|\|\s*\[\]\)\.length/);
+  });
+});
+
+// ── Activity feed panel ─────────────────────────────────────────────────
+
+describe('activity feed panel', () => {
+  test('tracks activity panel visibility, entries, and loading state', () => {
+    expect(src).toContain('showActivity');
+    expect(src).toContain('setActivity');
+    expect(src).toContain('activityLoading');
+  });
+
+  test('loads activity from /boards/:listId/activity', () => {
+    expect(src).toMatch(/apiCall\(\s*['"]\/boards\/['"]\s*\+\s*list\.id\s*\+\s*['"]\/activity['"]\s*\)/);
+  });
+
+  test('loads lazily: only fetches once the panel is opened', () => {
+    expect(src).toMatch(/if\s*\(showActivity\)\s*loadActivity\(\)/);
+  });
+
+  test('header has an Activity toggle button', () => {
+    expect(src).toContain('Activity');
+    expect(src).toMatch(/onClick=\{\(\)\s*=>\s*setShowActivity\(v\s*=>\s*!v\)\}/);
+  });
+
+  test('Escape closes the activity panel first, before other board escape handling', () => {
+    const escIdx = src.indexOf("'Escape'");
+    const escBlock = src.slice(escIdx, escIdx + 500);
+    const showActivityIdx = escBlock.indexOf('showActivity');
+    const selectedCardIdx = escBlock.indexOf('selectedCard');
+    expect(showActivityIdx).toBeGreaterThan(-1);
+    expect(showActivityIdx).toBeLessThan(selectedCardIdx);
+  });
+
+  test('renders a scrollable list of entries with actor, action, and timestamp', () => {
+    expect(src).toContain('board-activity-list');
+    expect(src).toContain('board-activity-entry');
+    expect(src).toContain('formatActivityAction');
+    expect(src).toContain('formatActivityTime');
+    expect(src).toContain('entry.actor_pubkey');
+    expect(src).toContain('entry.created_at');
+  });
+
+  test('shows an empty state when there is no activity yet', () => {
+    expect(src).toContain('No activity yet.');
+  });
+});

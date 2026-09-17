@@ -24,6 +24,9 @@ function BoardView({ list, onClose, apiCall, user }) {
   const [dropTargetColumnId, setDropTargetColumnId] = useState(null);
   const [contextCard, setContextCard] = useState(null);
   const [boardTags, setBoardTags] = useState([]);
+  const [showActivity, setShowActivity] = useState(false);
+  const [activity, setActivity] = useState([]);
+  const [activityLoading, setActivityLoading] = useState(false);
   const cardMenu = useCardContextMenu();
 
   // Filter state, synced to URL query string so filtered views are shareable.
@@ -93,10 +96,30 @@ function BoardView({ list, onClose, apiCall, user }) {
     loadBoard();
   }, [loadBoard]);
 
+  const loadActivity = useCallback(async () => {
+    setActivityLoading(true);
+    try {
+      const response = await apiCall('/boards/' + list.id + '/activity');
+      if (response.ok) {
+        setActivity(await response.json());
+      }
+    } catch (err) {
+      console.error('Error loading activity:', err);
+    } finally {
+      setActivityLoading(false);
+    }
+  }, [apiCall, list.id]);
+
+  // Load lazily: only once the panel is opened, then refresh on demand.
+  useEffect(() => {
+    if (showActivity) loadActivity();
+  }, [showActivity, loadActivity]);
+
   useEffect(() => {
     const handleKeyDown = (e) => {
       if (e.key === 'Escape') {
-        if (selectedCard) setSelectedCard(null);
+        if (showActivity) setShowActivity(false);
+        else if (selectedCard) setSelectedCard(null);
         else if (addingCardColumnId) { setAddingCardColumnId(null); setNewCardTitle(''); }
         else if (editingColumnId) { setEditingColumnId(null); setEditingColumnName(''); }
         else if (addingColumn) { setAddingColumn(false); setNewColumnName(''); }
@@ -106,7 +129,7 @@ function BoardView({ list, onClose, apiCall, user }) {
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [onClose, selectedCard, addingCardColumnId, addingColumn, editingColumnId, showEditBoard]);
+  }, [onClose, selectedCard, addingCardColumnId, addingColumn, editingColumnId, showEditBoard, showActivity]);
 
   const canWrite = access === 'owner' || access === 'admin' || access === 'write';
   const canAdmin = access === 'owner' || access === 'admin';
@@ -243,6 +266,26 @@ function BoardView({ list, onClose, apiCall, user }) {
 
   // ── Helpers ──────────────────────────────────────────────────────────
 
+  const ACTIVITY_LABELS = {
+    card_created: 'created a card',
+    card_moved: 'moved a card',
+    card_deleted: 'deleted a card',
+    comment_created: 'commented',
+  };
+
+  const formatActivityAction = (action) => ACTIVITY_LABELS[action] || action;
+
+  const formatActivityTime = (ts) => {
+    const d = new Date(ts);
+    const now = new Date();
+    const diffMins = Math.floor((now - d) / 60000);
+    if (diffMins < 1) return 'just now';
+    if (diffMins < 60) return diffMins + 'm ago';
+    const diffHrs = Math.floor(diffMins / 60);
+    if (diffHrs < 24) return diffHrs + 'h ago';
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  };
+
   const getPriorityColor = (p) => {
     if (p <= 1) return 'var(--error)';
     if (p <= 3) return 'var(--warning)';
@@ -250,15 +293,24 @@ function BoardView({ list, onClose, apiCall, user }) {
     return 'var(--text-secondary)';
   };
 
+  // Due-date indicator for the card face: overdue = red, due within the
+  // next 3 days = amber, further out = subtle gray. Compares whole
+  // calendar days (local midnight to local midnight) so "diff" isn't
+  // thrown off by the time of day the check happens to run at.
   const formatDate = (d) => {
     if (!d) return null;
-    const date = new Date(d);
-    const today = new Date();
-    const diff = Math.ceil((date - today) / (1000 * 60 * 60 * 24));
-    if (diff < 0) return { text: 'Overdue', color: 'var(--error)' };
-    if (diff === 0) return { text: 'Today', color: 'var(--warning)' };
-    if (diff === 1) return { text: 'Tomorrow', color: 'var(--warning)' };
-    return { text: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }), color: 'var(--text-secondary)' };
+    const [y, m, day] = d.slice(0, 10).split('-').map(Number);
+    const due = new Date(y, m - 1, day);
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const diff = Math.round((due - today) / (1000 * 60 * 60 * 24));
+
+    if (diff < 0) return { text: 'Overdue', color: 'var(--error)', level: 'overdue' };
+    if (diff <= 3) {
+      const text = diff === 0 ? 'Today' : diff === 1 ? 'Tomorrow' : due.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      return { text, color: 'var(--warning)', level: 'soon' };
+    }
+    return { text: due.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }), color: 'var(--text-secondary)', level: 'later' };
   };
 
   // ── Render ───────────────────────────────────────────────────────────
@@ -345,7 +397,7 @@ function BoardView({ list, onClose, apiCall, user }) {
           </span>
         )}
 
-        <span className="board-column-count">{(column.cards || []).length}</span>
+        <span className="board-column-count">({(column.cards || []).length})</span>
         {canAdmin && (
           <button
             className="board-column-delete"
@@ -386,7 +438,16 @@ function BoardView({ list, onClose, apiCall, user }) {
                 )}
                 {card.due_date && (() => {
                   const d = formatDate(card.due_date);
-                  return d ? <span style={{ color: d.color, fontSize: '0.75rem' }}>{d.text}</span> : null;
+                  return d ? (
+                    <span
+                      className={'board-card-due board-card-due-' + d.level}
+                      style={{ color: d.color }}
+                      title={'Due ' + d.text}
+                    >
+                      <span className="board-card-due-dot" style={{ backgroundColor: d.color }} />
+                      {d.text}
+                    </span>
+                  ) : null;
                 })()}
                 {card.assignee_pubkey && (
                   <span className="board-card-assignee" title={card.assignee_pubkey}>
@@ -486,6 +547,13 @@ function BoardView({ list, onClose, apiCall, user }) {
                   + Column
                 </button>
               )}
+              <button
+                className={'btn btn-secondary btn-small' + (showActivity ? ' active' : '')}
+                onClick={() => setShowActivity(v => !v)}
+                title="Activity feed"
+              >
+                🕒 Activity
+              </button>
               <button onClick={onClose} className="btn btn-primary btn-small">Close</button>
             </div>
           </div>
@@ -627,6 +695,49 @@ function BoardView({ list, onClose, apiCall, user }) {
               </div>
             )}
           </div>
+
+          {showActivity && (
+            <div className="board-activity-panel">
+              <div className="board-activity-panel-header">
+                <h4>Activity</h4>
+                <button
+                  className="board-activity-refresh"
+                  onClick={loadActivity}
+                  title="Refresh"
+                  disabled={activityLoading}
+                >
+                  ⟳
+                </button>
+                <button
+                  className="board-activity-close"
+                  onClick={() => setShowActivity(false)}
+                  title="Close"
+                >
+                  ×
+                </button>
+              </div>
+              <div className="board-activity-list">
+                {activityLoading ? (
+                  <p className="board-activity-empty">Loading...</p>
+                ) : activity.length === 0 ? (
+                  <p className="board-activity-empty">No activity yet.</p>
+                ) : (
+                  activity.map(entry => (
+                    <div key={entry.id} className="board-activity-entry">
+                      <div className="board-activity-entry-line">
+                        <span className="board-activity-actor" title={entry.actor_pubkey}>
+                          {truncatePubkey(entry.actor_pubkey)}
+                        </span>
+                        <span className="board-activity-action">{formatActivityAction(entry.action)}</span>
+                      </div>
+                      {entry.detail && <div className="board-activity-detail">{entry.detail}</div>}
+                      <div className="board-activity-time">{formatActivityTime(entry.created_at)}</div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
