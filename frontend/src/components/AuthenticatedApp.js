@@ -9,6 +9,7 @@ import DragDropList from './DragDropList';
 import LabelManager from './LabelManager';
 import BoardView from './BoardView';
 import { isSharedList, shareLabel, canWriteList } from '../lib/accessHelpers';
+import { registerServiceWorkerIfGranted } from '../lib/push';
 
 function AuthenticatedApp() {
   const { user, logout, apiCall, formatPubkey } = useAuth();
@@ -45,6 +46,16 @@ function AuthenticatedApp() {
     loadLists();
     loadUserSettings();
   }, [user?.pubkey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Re-register the service worker on app load if the user already granted
+  // notification permission in a previous session — otherwise a returning
+  // user with push enabled would silently stop receiving notifications
+  // after a browser restart clears the in-memory registration.
+  useEffect(() => {
+    registerServiceWorkerIfGranted().catch((err) => {
+      console.error('Service worker registration failed:', err);
+    });
+  }, []);
 
   useEffect(() => {
     const theme = userSettings.theme === 'system' 

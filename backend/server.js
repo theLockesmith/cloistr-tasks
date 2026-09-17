@@ -6,11 +6,13 @@ import morgan from 'morgan';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
 import promClient from 'prom-client';
+import webpush from 'web-push';
 
 import { initializeDatabase, createPool, createAppPool } from './database/init.js';
 import { emptyToNull, toIntOrNull } from './utils.js';
 import { authenticateToken, optionalAuth, issueJWT } from './middleware/auth.js';
 import { listAccess, hasAccess, templateAccess, taskAccess, cardAccess } from './lib/access.js';
+import { notifyBoardContributors } from './lib/notify.js';
 
 // Import nostr-tools for signature verification
 import { verifyEvent, getPublicKey } from 'nostr-tools/pure';
@@ -59,6 +61,21 @@ function invalidDeadline(value) {
   if (value === undefined || value === null || value === '') return false;
   return !TIME_HHMM_RE.test(value);
 }
+// ── Web Push (VAPID) ────────────────────────────────────────────────────
+// Optional: if the keys aren't set, the /api/push/* endpoints stay
+// registered (so the frontend doesn't need to feature-detect) but sends
+// are silently skipped — see lib/notify.js. Generate a pair with
+// `node scripts/generate-vapid-keys.js`.
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY;
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY;
+const VAPID_SUBJECT = process.env.VAPID_SUBJECT || 'mailto:notifications@cloistr.xyz';
+const pushConfigured = Boolean(VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY);
+if (pushConfigured) {
+  webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+} else {
+  console.warn('⚠️  VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY not set — push notifications disabled');
+}
+
 const app = express();
 const port = process.env.PORT || 3000;
 
@@ -466,6 +483,63 @@ app.put('/api/user/settings', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Error updating user settings:', error);
     res.status(500).json({ error: 'Failed to update user settings' });
+  }
+});
+
+// ── Web Push subscriptions ─────────────────────────────────────────────
+
+// No auth: the service worker needs the public key to build a push
+// subscription BEFORE the user has logged in (subscribing can happen from
+// the settings screen right after a fresh login, but the key itself is
+// not secret — it's meant to be public).
+app.get('/api/push/vapid-key', (req, res) => {
+  if (!pushConfigured) return res.status(404).json({ error: 'Push notifications are not configured' });
+  res.json({ publicKey: VAPID_PUBLIC_KEY });
+});
+
+// Save (or update) a browser's push subscription for the current user.
+// Upserts on endpoint: re-subscribing the same browser replaces its keys
+// rather than creating a duplicate row.
+app.post('/api/push/subscribe', authenticateToken, async (req, res) => {
+  try {
+    const { endpoint, keys } = req.body || {};
+    if (!endpoint || !keys || !keys.p256dh || !keys.auth) {
+      return res.status(400).json({ error: 'endpoint and keys.p256dh/keys.auth are required' });
+    }
+
+    await pool.query(`
+      INSERT INTO push_subscriptions (user_pubkey, endpoint, p256dh, auth)
+      VALUES ($1, $2, $3, $4)
+      ON CONFLICT (endpoint) DO UPDATE SET
+        user_pubkey = EXCLUDED.user_pubkey,
+        p256dh = EXCLUDED.p256dh,
+        auth = EXCLUDED.auth
+    `, [req.user.id, endpoint, keys.p256dh, keys.auth]);
+
+    res.status(201).json({ success: true });
+  } catch (error) {
+    console.error('Error saving push subscription:', error);
+    res.status(500).json({ error: 'Failed to save push subscription' });
+  }
+});
+
+// Remove a browser's push subscription. Scoped to the caller's own pubkey
+// so one user cannot delete another's subscription even if they somehow
+// learned its endpoint.
+app.delete('/api/push/subscribe', authenticateToken, async (req, res) => {
+  try {
+    const { endpoint } = req.body || {};
+    if (!endpoint) return res.status(400).json({ error: 'endpoint is required' });
+
+    await pool.query(
+      'DELETE FROM push_subscriptions WHERE endpoint = $1 AND user_pubkey = $2',
+      [endpoint, req.user.id],
+    );
+
+    res.status(204).send();
+  } catch (error) {
+    console.error('Error removing push subscription:', error);
+    res.status(500).json({ error: 'Failed to remove push subscription' });
   }
 });
 
@@ -2214,6 +2288,12 @@ app.post('/api/boards/:listId/cards', authenticateToken, async (req, res) => {
     const card = result.rows[0];
     await logActivity(listId, card.id, req.user.id, 'card_created', `Created card "${card.title}"`);
 
+    // Fire-and-forget: never block the response on push delivery.
+    notifyBoardContributors(
+      pool, listId, req.user.id, 'New card',
+      `"${card.title}" was added to the board`,
+    ).catch((err) => console.error('Push notification failed (card_created):', err));
+
     res.status(201).json({ ...card, access });
   } catch (error) {
     // Handle unique constraint on (external_source, external_id) for idempotency.
@@ -2316,6 +2396,11 @@ app.post('/api/boards/:listId/cards/:cardId/move', authenticateToken, async (req
       `Moved card "${card.title}" to "${colCheck.rows[0].name}"`,
     );
 
+    notifyBoardContributors(
+      pool, listId, req.user.id, 'Card moved',
+      `"${card.title}" was moved to "${colCheck.rows[0].name}"`,
+    ).catch((err) => console.error('Push notification failed (card_moved):', err));
+
     res.json(card);
   } catch (error) {
     console.error('Error moving card:', error);
@@ -2412,6 +2497,11 @@ app.post('/api/boards/:listId/cards/:cardId/comments', authenticateToken, async 
       listId, cardId, req.user.id, 'comment_created',
       comment.body.length > 140 ? comment.body.slice(0, 140) + '…' : comment.body,
     );
+
+    notifyBoardContributors(
+      pool, listId, req.user.id, 'New comment',
+      comment.body.length > 140 ? comment.body.slice(0, 140) + '…' : comment.body,
+    ).catch((err) => console.error('Push notification failed (comment_created):', err));
 
     res.status(201).json({ ...comment, access });
   } catch (error) {
@@ -2556,6 +2646,11 @@ app.post('/api/boards/:listId/comments', authenticateToken, async (req, res) => 
       listId, null, req.user.id, 'comment_created',
       comment.body.length > 140 ? comment.body.slice(0, 140) + '…' : comment.body,
     );
+
+    notifyBoardContributors(
+      pool, listId, req.user.id, 'New comment',
+      comment.body.length > 140 ? comment.body.slice(0, 140) + '…' : comment.body,
+    ).catch((err) => console.error('Push notification failed (comment_created):', err));
 
     res.status(201).json({ ...comment, access });
   } catch (error) {
