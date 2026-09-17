@@ -1473,6 +1473,524 @@ app.post('/api/lists/:listId/transfer', authenticateToken, async (req, res) => {
   }
 });
 
+// ── Data export/import ──────────────────────────────────────────────────
+
+// Export all user data as JSON.
+app.get('/api/user/export', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    const [lists, templates, labels, templateLabels, tasks, boards] = await Promise.all([
+      pool.query(`
+        SELECT id, name, description, icon, color, sort_order, list_type,
+               reset_enabled, reset_time, reset_days, custom_reset_days, visibility,
+               created_at
+        FROM task_lists
+        WHERE user_id = $1 AND active = true
+        ORDER BY sort_order
+      `, [userId]),
+      pool.query(`
+        SELECT tt.id, tt.list_id, tt.name, tt.description, tt.time_slot,
+               tt.estimated_minutes, tt.sort_order, tt.priority, tt.due_date,
+               tt.recurring_deadline, tt.parent_template_id, tt.reminder_offset_minutes,
+               tt.created_at
+        FROM task_templates tt
+        JOIN task_lists tl ON tl.id = tt.list_id
+        WHERE tl.user_id = $1 AND tt.active = true
+        ORDER BY tt.list_id, tt.sort_order
+      `, [userId]),
+      pool.query(
+        'SELECT id, name, color FROM labels WHERE user_id = $1 ORDER BY name',
+        [userId],
+      ),
+      pool.query(`
+        SELECT ttl.template_id, ttl.label_id
+        FROM task_template_labels ttl
+        JOIN task_templates tt ON tt.id = ttl.template_id
+        JOIN task_lists tl ON tl.id = tt.list_id
+        WHERE tl.user_id = $1
+      `, [userId]),
+      pool.query(`
+        SELECT t.template_id, t.reset_date, t.completed_at
+        FROM tasks t
+        JOIN task_lists tl ON tl.id = t.list_id
+        WHERE tl.user_id = $1
+        ORDER BY t.reset_date DESC
+        LIMIT 10000
+      `, [userId]),
+      // Board data: columns, cards, tags
+      pool.query(`
+        SELECT bc.id, bc.list_id, bc.name, bc.color, bc.sort_order, bc.collapsed
+        FROM board_columns bc
+        JOIN task_lists tl ON tl.id = bc.list_id
+        WHERE tl.user_id = $1
+        ORDER BY bc.list_id, bc.sort_order
+      `, [userId]),
+    ]);
+
+    const [cards, boardTags, cardTags, checklists] = await Promise.all([
+      pool.query(`
+        SELECT bc.id, bc.column_id, bc.list_id, bc.title, bc.description,
+               bc.priority, bc.due_date, bc.assignee_pubkey, bc.sort_order,
+               bc.created_at
+        FROM board_cards bc
+        JOIN task_lists tl ON tl.id = bc.list_id
+        WHERE tl.user_id = $1
+        ORDER BY bc.list_id, bc.sort_order
+      `, [userId]),
+      pool.query(`
+        SELECT bt.id, bt.list_id, bt.name, bt.color
+        FROM board_tags bt
+        JOIN task_lists tl ON tl.id = bt.list_id
+        WHERE tl.user_id = $1
+      `, [userId]),
+      pool.query(`
+        SELECT bct.card_id, bct.tag_id
+        FROM board_card_tags bct
+        JOIN board_cards bc ON bc.id = bct.card_id
+        JOIN task_lists tl ON tl.id = bc.list_id
+        WHERE tl.user_id = $1
+      `, [userId]),
+      pool.query(`
+        SELECT ci.card_id, ci.text, ci.done, ci.sort_order
+        FROM card_checklist_items ci
+        JOIN board_cards bc ON bc.id = ci.card_id
+        JOIN task_lists tl ON tl.id = bc.list_id
+        WHERE tl.user_id = $1
+        ORDER BY ci.card_id, ci.sort_order
+      `, [userId]),
+    ]);
+
+    const exportData = {
+      version: 1,
+      exported_at: new Date().toISOString(),
+      lists: lists.rows,
+      templates: templates.rows,
+      labels: labels.rows,
+      template_labels: templateLabels.rows,
+      task_history: tasks.rows,
+      board_columns: boards.rows,
+      board_cards: cards.rows,
+      board_tags: boardTags.rows,
+      board_card_tags: cardTags.rows,
+      board_checklists: checklists.rows,
+    };
+
+    res.set('Content-Type', 'application/json');
+    res.set('Content-Disposition', `attachment; filename="ritual-forge-export-${new Date().toISOString().split('T')[0]}.json"`);
+    res.json(exportData);
+  } catch (error) {
+    console.error('Error exporting data:', error);
+    res.status(500).json({ error: 'Failed to export data' });
+  }
+});
+
+// Import user data from a JSON export.
+// Additive: creates new lists/templates alongside existing ones.
+app.post('/api/user/import', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const data = req.body;
+
+    if (!data || data.version !== 1) {
+      return res.status(400).json({ error: 'Invalid export format (expected version 1)' });
+    }
+
+    const client = await pool.connect();
+    const stats = { lists: 0, templates: 0, labels: 0, board_columns: 0, board_cards: 0 };
+
+    try {
+      await client.query('BEGIN');
+
+      // Map old IDs to new IDs for FK resolution.
+      const listIdMap = {};
+      const templateIdMap = {};
+      const labelIdMap = {};
+      const columnIdMap = {};
+      const cardIdMap = {};
+      const tagIdMap = {};
+
+      // Import labels first (templates reference them).
+      for (const label of (data.labels || [])) {
+        const result = await client.query(
+          `INSERT INTO labels (user_id, name, color)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (user_id, name) DO UPDATE SET color = EXCLUDED.color
+           RETURNING id`,
+          [userId, label.name, label.color],
+        );
+        labelIdMap[label.id] = result.rows[0].id;
+        stats.labels++;
+      }
+
+      // Import lists.
+      const maxSort = await client.query(
+        'SELECT COALESCE(MAX(sort_order), 0) AS max FROM task_lists WHERE user_id = $1',
+        [userId],
+      );
+      let sortOffset = maxSort.rows[0].max;
+
+      for (const list of (data.lists || [])) {
+        sortOffset++;
+        const result = await client.query(`
+          INSERT INTO task_lists (
+            name, description, icon, color, user_id, sort_order, list_type,
+            reset_enabled, reset_time, reset_days, custom_reset_days
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+          RETURNING id
+        `, [
+          list.name, list.description, list.icon || '📋', list.color || '#3b82f6',
+          userId, sortOffset, list.list_type || 'recurring',
+          list.reset_enabled !== false, list.reset_time || '06:00',
+          list.reset_days || 'daily',
+          Array.isArray(list.custom_reset_days) ? list.custom_reset_days : [],
+        ]);
+        listIdMap[list.id] = result.rows[0].id;
+        stats.lists++;
+
+        // Seed default board columns if the import doesn't include them.
+        if ((list.list_type || 'recurring') === 'board') {
+          const importedColumns = (data.board_columns || []).filter(c => c.list_id === list.id);
+          if (importedColumns.length === 0) {
+            const defaults = ['To Do', 'In Progress', 'Done'];
+            for (let i = 0; i < defaults.length; i++) {
+              const colRes = await client.query(
+                'INSERT INTO board_columns (list_id, name, sort_order) VALUES ($1, $2, $3) RETURNING id',
+                [listIdMap[list.id], defaults[i], i + 1],
+              );
+              columnIdMap[`default-${list.id}-${i}`] = colRes.rows[0].id;
+            }
+          }
+        }
+      }
+
+      // Import board columns.
+      for (const col of (data.board_columns || [])) {
+        const newListId = listIdMap[col.list_id];
+        if (!newListId) continue;
+        const result = await client.query(
+          'INSERT INTO board_columns (list_id, name, color, sort_order, collapsed) VALUES ($1, $2, $3, $4, $5) RETURNING id',
+          [newListId, col.name, col.color, col.sort_order, col.collapsed || false],
+        );
+        columnIdMap[col.id] = result.rows[0].id;
+        stats.board_columns++;
+      }
+
+      // Import board tags.
+      for (const tag of (data.board_tags || [])) {
+        const newListId = listIdMap[tag.list_id];
+        if (!newListId) continue;
+        const result = await client.query(
+          `INSERT INTO board_tags (list_id, name, color) VALUES ($1, $2, $3)
+           ON CONFLICT (list_id, name) DO UPDATE SET color = EXCLUDED.color
+           RETURNING id`,
+          [newListId, tag.name, tag.color],
+        );
+        tagIdMap[tag.id] = result.rows[0].id;
+      }
+
+      // Import templates (parent templates first, then children).
+      const topLevel = (data.templates || []).filter(t => !t.parent_template_id);
+      const children = (data.templates || []).filter(t => t.parent_template_id);
+
+      for (const t of topLevel) {
+        const newListId = listIdMap[t.list_id];
+        if (!newListId) continue;
+        const result = await client.query(`
+          INSERT INTO task_templates (
+            list_id, name, description, time_slot, estimated_minutes,
+            sort_order, priority, due_date, recurring_deadline,
+            reminder_offset_minutes
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+          RETURNING id
+        `, [
+          newListId, t.name, t.description, t.time_slot, t.estimated_minutes,
+          t.sort_order, t.priority || 'medium', t.due_date, t.recurring_deadline,
+          t.reminder_offset_minutes,
+        ]);
+        templateIdMap[t.id] = result.rows[0].id;
+        stats.templates++;
+      }
+
+      for (const t of children) {
+        const newListId = listIdMap[t.list_id];
+        const newParentId = templateIdMap[t.parent_template_id];
+        if (!newListId || !newParentId) continue;
+        const result = await client.query(`
+          INSERT INTO task_templates (
+            list_id, name, description, time_slot, estimated_minutes,
+            sort_order, priority, due_date, recurring_deadline,
+            parent_template_id, reminder_offset_minutes
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+          RETURNING id
+        `, [
+          newListId, t.name, t.description, t.time_slot, t.estimated_minutes,
+          t.sort_order, t.priority || 'medium', t.due_date, t.recurring_deadline,
+          newParentId, t.reminder_offset_minutes,
+        ]);
+        templateIdMap[t.id] = result.rows[0].id;
+        stats.templates++;
+      }
+
+      // Re-link template → label associations.
+      for (const tl of (data.template_labels || [])) {
+        const newTemplateId = templateIdMap[tl.template_id];
+        const newLabelId = labelIdMap[tl.label_id];
+        if (!newTemplateId || !newLabelId) continue;
+        await client.query(
+          'INSERT INTO task_template_labels (template_id, label_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+          [newTemplateId, newLabelId],
+        );
+      }
+
+      // Import board cards.
+      for (const card of (data.board_cards || [])) {
+        const newListId = listIdMap[card.list_id];
+        const newColumnId = columnIdMap[card.column_id];
+        if (!newListId || !newColumnId) continue;
+        const result = await client.query(`
+          INSERT INTO board_cards (
+            column_id, list_id, title, description, priority, due_date,
+            author_pubkey, assignee_pubkey, sort_order
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+          RETURNING id
+        `, [
+          newColumnId, newListId, card.title, card.description,
+          card.priority || 3, card.due_date,
+          userId, card.assignee_pubkey, card.sort_order,
+        ]);
+        cardIdMap[card.id] = result.rows[0].id;
+        stats.board_cards++;
+      }
+
+      // Re-link card → tag associations.
+      for (const ct of (data.board_card_tags || [])) {
+        const newCardId = cardIdMap[ct.card_id];
+        const newTagId = tagIdMap[ct.tag_id];
+        if (!newCardId || !newTagId) continue;
+        await client.query(
+          'INSERT INTO board_card_tags (card_id, tag_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+          [newCardId, newTagId],
+        );
+      }
+
+      // Import checklists.
+      for (const item of (data.board_checklists || [])) {
+        const newCardId = cardIdMap[item.card_id];
+        if (!newCardId) continue;
+        await client.query(
+          'INSERT INTO card_checklist_items (card_id, text, done, sort_order) VALUES ($1, $2, $3, $4)',
+          [newCardId, item.text, item.done || false, item.sort_order],
+        );
+      }
+
+      await client.query('COMMIT');
+      res.json({ message: 'Import completed', stats });
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error('Error importing data:', error);
+    res.status(500).json({ error: 'Failed to import data' });
+  }
+});
+
+// ── iCal feed ───────────────────────────────────────────────────────────
+//
+// Calendar apps subscribe via a token-bearing URL that requires no
+// interactive auth.  The token is generated/revoked through authenticated
+// endpoints; the feed itself is unauthenticated.
+
+// Generate (or regenerate) an iCal feed token.
+app.post('/api/user/ical-token', authenticateToken, async (req, res) => {
+  try {
+    const token = crypto.randomBytes(32).toString('hex');
+    const result = await pool.query(
+      `UPDATE user_settings SET ical_token = $1 WHERE user_id = $2 RETURNING ical_token`,
+      [token, req.user.id],
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User settings not found' });
+    }
+    res.json({ ical_token: result.rows[0].ical_token });
+  } catch (error) {
+    console.error('Error generating iCal token:', error);
+    res.status(500).json({ error: 'Failed to generate iCal token' });
+  }
+});
+
+// Get the current iCal token (if any).
+app.get('/api/user/ical-token', authenticateToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT ical_token FROM user_settings WHERE user_id = $1',
+      [req.user.id],
+    );
+    res.json({ ical_token: result.rows[0]?.ical_token || null });
+  } catch (error) {
+    console.error('Error fetching iCal token:', error);
+    res.status(500).json({ error: 'Failed to fetch iCal token' });
+  }
+});
+
+// Revoke the iCal feed token.
+app.delete('/api/user/ical-token', authenticateToken, async (req, res) => {
+  try {
+    await pool.query(
+      'UPDATE user_settings SET ical_token = NULL WHERE user_id = $1',
+      [req.user.id],
+    );
+    res.status(204).send();
+  } catch (error) {
+    console.error('Error revoking iCal token:', error);
+    res.status(500).json({ error: 'Failed to revoke iCal token' });
+  }
+});
+
+function icalEscape(text) {
+  if (!text) return '';
+  return text
+    .replace(/\\/g, '\\\\')
+    .replace(/;/g, '\\;')
+    .replace(/,/g, '\\,')
+    .replace(/\n/g, '\\n');
+}
+
+function icalFold(line) {
+  const parts = [];
+  while (line.length > 75) {
+    parts.push(line.slice(0, 75));
+    line = ' ' + line.slice(75);
+  }
+  parts.push(line);
+  return parts.join('\r\n');
+}
+
+function icalPriority(p) {
+  if (p === 'high' || p === 1 || p === 2) return 1;
+  if (p === 'low' || p === 4 || p === 5) return 9;
+  return 5;
+}
+
+// Serve the .ics feed — unauthenticated, keyed by token.
+app.get('/api/ical/:token.ics', async (req, res) => {
+  try {
+    const { token } = req.params;
+    if (!token || !/^[0-9a-f]{64}$/.test(token)) {
+      return res.status(400).json({ error: 'Invalid token format' });
+    }
+
+    const userResult = await pool.query(
+      'SELECT user_id FROM user_settings WHERE ical_token = $1',
+      [token],
+    );
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Feed not found' });
+    }
+    const userId = userResult.rows[0].user_id;
+
+    const [templates, cards] = await Promise.all([
+      pool.query(`
+        SELECT tt.id, tt.name, tt.description, tt.priority, tt.due_date,
+               tt.time_slot, tt.estimated_minutes, tt.recurring_deadline,
+               tt.updated_at,
+               tl.name AS list_name
+        FROM task_templates tt
+        JOIN task_lists tl ON tl.id = tt.list_id
+        WHERE tl.user_id = $1 AND tl.active = true AND tt.active = true
+          AND tt.due_date IS NOT NULL
+      `, [userId]),
+      pool.query(`
+        SELECT bc.id, bc.title, bc.description, bc.priority, bc.due_date,
+               bc.updated_at,
+               tl.name AS board_name
+        FROM board_cards bc
+        JOIN task_lists tl ON tl.id = bc.list_id
+        WHERE tl.user_id = $1 AND tl.active = true
+          AND bc.due_date IS NOT NULL
+      `, [userId]),
+    ]);
+
+    const now = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+    const lines = [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'PRODID:-//Cloistr//Ritual Forge//EN',
+      'CALSCALE:GREGORIAN',
+      'METHOD:PUBLISH',
+      icalFold('X-WR-CALNAME:Ritual Forge'),
+    ];
+
+    for (const t of templates.rows) {
+      const dtstart = t.due_date instanceof Date
+        ? t.due_date.toISOString().split('T')[0].replace(/-/g, '')
+        : String(t.due_date).split('T')[0].replace(/-/g, '');
+      const dtstamp = t.updated_at
+        ? new Date(t.updated_at).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '')
+        : now;
+
+      lines.push('BEGIN:VEVENT');
+      lines.push(`UID:template-${t.id}@tasks.cloistr.xyz`);
+      lines.push(`DTSTAMP:${dtstamp}`);
+      lines.push(`DTSTART;VALUE=DATE:${dtstart}`);
+      lines.push(icalFold(`SUMMARY:${icalEscape(t.name)}`));
+      if (t.description) {
+        lines.push(icalFold(`DESCRIPTION:${icalEscape(t.description)}`));
+      }
+      if (t.list_name) {
+        lines.push(icalFold(`CATEGORIES:${icalEscape(t.list_name)}`));
+      }
+      lines.push(`PRIORITY:${icalPriority(t.priority)}`);
+      if (t.estimated_minutes) {
+        const h = Math.floor(t.estimated_minutes / 60);
+        const m = t.estimated_minutes % 60;
+        lines.push(`DURATION:PT${h > 0 ? h + 'H' : ''}${m}M`);
+      }
+      lines.push('END:VEVENT');
+    }
+
+    for (const c of cards.rows) {
+      const dtstart = c.due_date instanceof Date
+        ? c.due_date.toISOString().split('T')[0].replace(/-/g, '')
+        : String(c.due_date).split('T')[0].replace(/-/g, '');
+      const dtstamp = c.updated_at
+        ? new Date(c.updated_at).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '')
+        : now;
+
+      lines.push('BEGIN:VEVENT');
+      lines.push(`UID:card-${c.id}@tasks.cloistr.xyz`);
+      lines.push(`DTSTAMP:${dtstamp}`);
+      lines.push(`DTSTART;VALUE=DATE:${dtstart}`);
+      lines.push(icalFold(`SUMMARY:${icalEscape(c.title)}`));
+      if (c.description) {
+        lines.push(icalFold(`DESCRIPTION:${icalEscape(c.description)}`));
+      }
+      if (c.board_name) {
+        lines.push(icalFold(`CATEGORIES:${icalEscape(c.board_name)}`));
+      }
+      lines.push(`PRIORITY:${icalPriority(c.priority)}`);
+      lines.push('END:VEVENT');
+    }
+
+    lines.push('END:VCALENDAR');
+
+    const body = lines.join('\r\n') + '\r\n';
+    res.set('Content-Type', 'text/calendar; charset=utf-8');
+    res.set('Content-Disposition', 'inline; filename="ritual-forge.ics"');
+    res.send(body);
+  } catch (error) {
+    console.error('Error serving iCal feed:', error);
+    res.status(500).json({ error: 'Failed to serve iCal feed' });
+  }
+});
+
 // ── Board endpoints ─────────────────────────────────────────────────────
 //
 // Boards are task_lists with list_type = 'board'.  They reuse the existing

@@ -16,6 +16,9 @@ function UserSettings({ onClose, apiCall, userSettings, setUserSettings, onSetti
     ...userSettings
   });
   const [loading, setLoading] = useState(false);
+  const [icalToken, setIcalToken] = useState(null);
+  const [icalLoading, setIcalLoading] = useState(false);
+  const [icalCopied, setIcalCopied] = useState(false);
 
   // Update local settings when userSettings prop changes
   useEffect(() => {
@@ -24,6 +27,20 @@ function UserSettings({ onClose, apiCall, userSettings, setUserSettings, onSetti
       ...userSettings
     }));
   }, [userSettings]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await apiCall('/user/ical-token');
+        if (res.ok) {
+          const data = await res.json();
+          setIcalToken(data.ical_token);
+        }
+      } catch (e) {
+        console.error('Error loading iCal token:', e);
+      }
+    })();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -87,6 +104,54 @@ function UserSettings({ onClose, apiCall, userSettings, setUserSettings, onSetti
       console.error('Error during manual reset:', error);
       alert('Error during manual reset');
     }
+  };
+
+  const icalFeedUrl = icalToken
+    ? `${window.location.origin}/api/ical/${icalToken}.ics`
+    : null;
+
+  const generateIcalToken = async () => {
+    setIcalLoading(true);
+    try {
+      const res = await apiCall('/user/ical-token', { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        setIcalToken(data.ical_token);
+      } else {
+        alert('Failed to generate feed URL');
+      }
+    } catch (e) {
+      console.error('Error generating iCal token:', e);
+      alert('Error generating feed URL');
+    } finally {
+      setIcalLoading(false);
+    }
+  };
+
+  const revokeIcalToken = async () => {
+    if (!window.confirm('Revoke your calendar feed URL? Any calendar app using it will stop updating.')) return;
+    setIcalLoading(true);
+    try {
+      const res = await apiCall('/user/ical-token', { method: 'DELETE' });
+      if (res.ok || res.status === 204) {
+        setIcalToken(null);
+      } else {
+        alert('Failed to revoke feed URL');
+      }
+    } catch (e) {
+      console.error('Error revoking iCal token:', e);
+      alert('Error revoking feed URL');
+    } finally {
+      setIcalLoading(false);
+    }
+  };
+
+  const copyIcalUrl = () => {
+    if (!icalFeedUrl) return;
+    navigator.clipboard.writeText(icalFeedUrl).then(() => {
+      setIcalCopied(true);
+      setTimeout(() => setIcalCopied(false), 2000);
+    });
   };
 
   const timezones = [
@@ -301,6 +366,137 @@ function UserSettings({ onClose, apiCall, userSettings, setUserSettings, onSetti
                 Browser notifications
               </label>
             </div>
+          </div>
+
+          {/* Data Export/Import */}
+          <div className="settings-section">
+            <h3>Data</h3>
+            <div className="form-group">
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={async () => {
+                    try {
+                      const res = await apiCall('/user/export');
+                      if (!res.ok) { alert('Export failed'); return; }
+                      const data = await res.json();
+                      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement('a');
+                      a.href = url;
+                      a.download = `ritual-forge-export-${new Date().toISOString().split('T')[0]}.json`;
+                      a.click();
+                      URL.revokeObjectURL(url);
+                    } catch (e) {
+                      console.error('Export error:', e);
+                      alert('Export failed');
+                    }
+                  }}
+                >
+                  Export All Data
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => {
+                    const input = document.createElement('input');
+                    input.type = 'file';
+                    input.accept = '.json';
+                    input.onchange = async (e) => {
+                      const file = e.target.files[0];
+                      if (!file) return;
+                      try {
+                        const text = await file.text();
+                        const data = JSON.parse(text);
+                        if (!window.confirm(`Import ${data.lists?.length || 0} lists and ${data.templates?.length || 0} templates? This adds data alongside your existing data.`)) return;
+                        const res = await apiCall('/user/import', {
+                          method: 'POST',
+                          body: JSON.stringify(data),
+                        });
+                        if (res.ok) {
+                          const result = await res.json();
+                          alert(`Imported ${result.stats.lists} lists, ${result.stats.templates} templates, ${result.stats.labels} labels.`);
+                          onSettingsUpdate();
+                        } else {
+                          const err = await res.json().catch(() => ({}));
+                          alert(err.error || 'Import failed');
+                        }
+                      } catch (err) {
+                        console.error('Import error:', err);
+                        alert('Import failed: invalid file');
+                      }
+                    };
+                    input.click();
+                  }}
+                >
+                  Import Data
+                </button>
+              </div>
+              <small>Export downloads all your lists, tasks, boards, and labels as JSON. Import adds data alongside existing data.</small>
+            </div>
+          </div>
+
+          {/* Calendar Feed */}
+          <div className="settings-section">
+            <h3>Calendar Feed</h3>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '0.75rem' }}>
+              Subscribe from any calendar app (Google Calendar, Apple Calendar, etc.) to see tasks with due dates.
+            </p>
+            {icalFeedUrl ? (
+              <div className="form-group">
+                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                  <input
+                    type="text"
+                    readOnly
+                    value={icalFeedUrl}
+                    style={{ flex: 1, fontFamily: 'monospace', fontSize: '0.8rem' }}
+                    onClick={(e) => e.target.select()}
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-small"
+                    onClick={copyIcalUrl}
+                    disabled={icalLoading}
+                  >
+                    {icalCopied ? 'Copied!' : 'Copy'}
+                  </button>
+                </div>
+                <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-small"
+                    onClick={generateIcalToken}
+                    disabled={icalLoading}
+                  >
+                    Regenerate
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-danger btn-small"
+                    onClick={revokeIcalToken}
+                    disabled={icalLoading}
+                  >
+                    Revoke
+                  </button>
+                </div>
+                <small style={{ color: 'var(--text-secondary)' }}>
+                  Anyone with this URL can see your task titles and due dates. Revoke it to cut off access.
+                </small>
+              </div>
+            ) : (
+              <div className="form-group">
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={generateIcalToken}
+                  disabled={icalLoading}
+                >
+                  {icalLoading ? 'Generating...' : 'Generate Feed URL'}
+                </button>
+                <small>Creates a private URL you can paste into your calendar app.</small>
+              </div>
+            )}
           </div>
 
           {/* Manual Actions */}
