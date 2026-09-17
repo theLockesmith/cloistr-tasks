@@ -1,18 +1,20 @@
 import React, { useState, useEffect } from 'react';
 import IconPicker from './IconPicker';
+import ContributorsPanel from './ContributorsPanel';
 
 const getDefaultColor = () => {
   const v = getComputedStyle(document.documentElement).getPropertyValue('--cloistr-primary').trim();
   return v || '#2dd4bf';
 };
 
-function EditListModal({ list, onClose, onSave, onDelete, apiCall }) {
+function EditListModal({ list, onClose, onSave, onDelete, apiCall, user }) {
   const [formData, setFormData] = useState({
     name: '',
     description: '',
     icon: '',
     color: getDefaultColor(),
     listType: 'recurring',
+    visibility: 'private',
     resetEnabled: true,
     resetTime: '06:00',
     resetDays: 'daily',
@@ -29,6 +31,7 @@ function EditListModal({ list, onClose, onSave, onDelete, apiCall }) {
         icon: list.icon || '',
         color: list.color || getDefaultColor(),
         listType: list.list_type || 'recurring',
+        visibility: list.visibility || 'private',
         resetEnabled: list.reset_enabled !== false,
         resetTime: list.reset_time || '06:00',
         resetDays: list.reset_days || 'daily',
@@ -59,6 +62,7 @@ function EditListModal({ list, onClose, onSave, onDelete, apiCall }) {
           icon: formData.icon || formData.name.charAt(0).toUpperCase(),
           color: formData.color,
           list_type: formData.listType,
+          visibility: formData.listType === 'board' ? formData.visibility : undefined,
           reset_enabled: formData.resetEnabled,
           reset_time: formData.resetTime,
           reset_days: formData.resetDays,
@@ -228,11 +232,38 @@ function EditListModal({ list, onClose, onSave, onDelete, apiCall }) {
             </React.Fragment>
           )}
           
+          {formData.listType === 'board' && (
+            <div className="form-group">
+              <label>Visibility</label>
+              <select
+                value={formData.visibility}
+                onChange={e => setFormData({...formData, visibility: e.target.value})}
+              >
+                <option value="private">Private (contributors only)</option>
+                <option value="public">Public (anyone can view)</option>
+              </select>
+              <small>
+                {formData.visibility === 'public'
+                  ? 'Anyone with the link can view this board. Only contributors can edit.'
+                  : 'Only you and contributors can see this board.'}
+              </small>
+            </div>
+          )}
+
+          {formData.listType === 'board' && (
+            <ContributorsPanel
+              listId={list.id}
+              access={list.access}
+              apiCall={apiCall}
+              user={user}
+            />
+          )}
+
           <div className="modal-actions">
-            <button 
-              type="button" 
-              onClick={handleDelete} 
-              className="btn btn-danger" 
+            <button
+              type="button"
+              onClick={handleDelete}
+              className="btn btn-danger"
               disabled={loading || deleting}
             >
               {deleting ? 'Deleting...' : 'Delete List'}

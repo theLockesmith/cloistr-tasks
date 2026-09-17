@@ -2498,3 +2498,71 @@ body {
   color: var(--text-secondary);
   opacity: 0.8;
 }
+
+/* ── Contributors panel (board settings) ─────────────────────────────── */
+
+.contributors-panel {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.contributors-panel h4 {
+  margin: 0 0 0.75rem;
+  font-size: 0.95rem;
+}
+
+.contributors-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-bottom: 0.75rem;
+}
+
+.contributor-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 6px;
+  background: var(--background);
+}
+
+.contributor-pubkey {
+  flex: 1;
+  font-family: monospace;
+  font-size: 0.8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.contributor-perm-select {
+  font-size: 0.8rem;
+  padding: 0.15rem 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.contributor-perm-label {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.contributor-remove {
+  padding: 0.1rem 0.4rem;
+  font-size: 0.9rem;
+  line-height: 1;
+}
+
+.contributor-add-form {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.contributor-add-form input[type="text"] {
+  min-width: 0;
+}

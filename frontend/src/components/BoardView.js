@@ -5,6 +5,7 @@ import { useCardContextMenu, CardContextMenu } from './CardContextMenu';
 import DragDropList from './DragDropList';
 import EditListModal from './EditListModal';
 import { isListOwner, canAdminList, canWriteList } from '../lib/accessHelpers';
+import { formatPubkey } from '../lib/pubkeyDisplay';
 
 function BoardView({ list, onClose, apiCall, user }) {
   const [columns, setColumns] = useState([]);
@@ -67,7 +68,7 @@ function BoardView({ list, onClose, apiCall, user }) {
     return true;
   }, [filterText, filterAssignee, filterOpener, filterTags]);
 
-  const truncatePubkey = (pk) => pk ? pk.slice(0, 8) + '...' : '';
+  const truncatePubkey = (pk) => formatPubkey(pk, 20);
 
   const allCards = useMemo(() => columns.flatMap(c => c.cards || []), [columns]);
   const uniqueAssignees = useMemo(() => [...new Set(allCards.map(c => c.assignee_pubkey).filter(Boolean))], [allCards]);
@@ -755,6 +756,7 @@ function BoardView({ list, onClose, apiCall, user }) {
             onClose();
           }}
           apiCall={apiCall}
+          user={user}
         />,
         document.body
       )}
