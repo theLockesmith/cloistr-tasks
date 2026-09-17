@@ -303,13 +303,10 @@ function AuthenticatedApp() {
                         <h3>{list.name}</h3>
                         <p className="list-description">{list.description}</p>
                         {isSharedList(list) && (
-                          <span style={{
-                            fontSize: '0.7rem',
-                            padding: '0.1rem 0.4rem',
-                            borderRadius: '4px',
-                            backgroundColor: 'var(--border)',
-                            color: 'var(--text-secondary)',
-                          }}>
+                          <span
+                            className={'access-badge' + (list.access === 'read' ? ' access-badge-read' : '')}
+                            title={'Your access level: ' + list.access}
+                          >
                             {shareLabel(list)}
                           </span>
                         )}

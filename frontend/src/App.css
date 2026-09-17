@@ -196,6 +196,28 @@ body {
   margin-top: 1rem;
 }
 
+/* Access badge — shown on shared boards/lists (list cards, board header)
+   to remind a contributor what their permission level is. */
+.access-badge {
+  display: inline-block;
+  margin-top: 0.4rem;
+  margin-left: 0.5rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1.6;
+  background: var(--border);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.access-badge-read {
+  background: color-mix(in srgb, var(--cloistr-warning) 25%, var(--border));
+  color: var(--text);
+}
+
 /* Progress Bar with Dynamic Colors */
 .progress-bar {
   background: var(--border);
@@ -1430,6 +1452,21 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.board-title-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.board-title-row h2 {
+  min-width: 0;
+}
+
+.board-title-row .access-badge {
+  margin-top: 0;
+  flex-shrink: 0;
 }
 
 .board-header-left p {

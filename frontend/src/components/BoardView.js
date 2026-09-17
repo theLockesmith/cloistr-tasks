@@ -136,6 +136,12 @@ function BoardView({ list, onClose, apiCall, user }) {
   const canAdmin = access === 'owner' || access === 'admin';
   const isOwner = access === 'owner';
 
+  // Small badge next to the board name so a contributor can see their own
+  // access level at a glance. Owners don't need to be told they own the
+  // board, so this only renders for shared access.
+  const ACCESS_BADGE_LABELS = { admin: 'Admin', write: 'Write', read: 'Read-only' };
+  const accessBadgeLabel = access && access !== 'owner' ? ACCESS_BADGE_LABELS[access] : null;
+
   // ── Column operations ────────────────────────────────────────────────
 
   const handleAddColumn = async (e) => {
@@ -525,8 +531,18 @@ function BoardView({ list, onClose, apiCall, user }) {
               >
                 {list.icon || boardName.charAt(0).toUpperCase()}
               </div>
-              <div>
-                <h2>{boardName}</h2>
+              <div style={{ minWidth: 0 }}>
+                <div className="board-title-row">
+                  <h2>{boardName}</h2>
+                  {accessBadgeLabel && (
+                    <span
+                      className={'access-badge' + (access === 'read' ? ' access-badge-read' : '')}
+                      title={'Your access level: ' + accessBadgeLabel}
+                    >
+                      {accessBadgeLabel}
+                    </span>
+                  )}
+                </div>
                 {boardDescription && <p>{boardDescription}</p>}
               </div>
             </div>

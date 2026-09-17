@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import IconPicker from './IconPicker';
 import ContributorsPanel from './ContributorsPanel';
+import { isListOwner } from '../lib/accessHelpers';
 
 const getDefaultColor = () => {
   const v = getComputedStyle(document.documentElement).getPropertyValue('--cloistr-primary').trim();
@@ -260,14 +261,16 @@ function EditListModal({ list, onClose, onSave, onDelete, apiCall, user }) {
           )}
 
           <div className="modal-actions">
-            <button
-              type="button"
-              onClick={handleDelete}
-              className="btn btn-danger"
-              disabled={loading || deleting}
-            >
-              {deleting ? 'Deleting...' : 'Delete List'}
-            </button>
+            {isListOwner(list) && (
+              <button
+                type="button"
+                onClick={handleDelete}
+                className="btn btn-danger"
+                disabled={loading || deleting}
+              >
+                {deleting ? 'Deleting...' : 'Delete List'}
+              </button>
+            )}
             <button type="button" onClick={onClose} className="btn btn-secondary" disabled={loading || deleting}>
               Cancel
             </button>
