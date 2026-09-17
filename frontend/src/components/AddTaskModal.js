@@ -18,6 +18,7 @@ function AddTaskModal({ listId, onClose, onSave, apiCall, parentTemplateId }) {
     estimatedMinutes: '',
     priority: 'medium',
     dueDate: '',
+    recurringDeadline: '',
     reminderOffsetMinutes: '',
     labelIds: [],
   });
@@ -149,6 +150,18 @@ function AddTaskModal({ listId, onClose, onSave, apiCall, parentTemplateId }) {
               value={formData.dueDate}
               onChange={update('dueDate')}
             />
+          </div>
+
+          <div className="form-group">
+            <label>Due by (recurring deadline, optional)</label>
+            <input
+              type="time"
+              value={formData.recurringDeadline}
+              onChange={update('recurringDeadline')}
+            />
+            <small style={{ color: 'var(--text-secondary)' }}>
+              Time of day this task should be done by, every day it recurs.
+            </small>
           </div>
 
           <div className="form-group">

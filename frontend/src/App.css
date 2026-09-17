@@ -1060,6 +1060,20 @@ body {
   color: var(--cloistr-warning);
 }
 
+.deadline-badge {
+  padding: 0.15rem 0.5rem;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--text-secondary) 12%, transparent);
+  color: var(--text-secondary);
+}
+
+.deadline-badge.overdue {
+  background: color-mix(in srgb, var(--cloistr-error) 15%, transparent);
+  color: var(--cloistr-error);
+}
+
 /* ── Task search and filter bar ── */
 
 .task-filters {

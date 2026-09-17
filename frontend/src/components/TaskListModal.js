@@ -86,17 +86,17 @@ function TaskListModal({ list, onClose, apiCall, user, onTasksUpdated }) {
 
   const reorderTasks = async (newTaskOrder) => {
     setTasks(newTaskOrder);
-    
+
     try {
-      const updatePromises = newTaskOrder.map((task, index) => 
-        apiCall('/templates/' + task.template_id, {
-          method: 'PUT',
-          body: JSON.stringify({ sort_order: index + 1 })
-        })
-      );
-      
-      await Promise.all(updatePromises);
-      
+      const response = await apiCall('/lists/' + list.id + '/templates/reorder', {
+        method: 'PUT',
+        body: JSON.stringify({ templateIds: newTaskOrder.map(task => task.template_id) })
+      });
+
+      if (!response.ok) {
+        throw new Error('Reorder request failed');
+      }
+
       if (onTasksUpdated) {
         onTasksUpdated();
       }

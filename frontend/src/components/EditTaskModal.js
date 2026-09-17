@@ -19,6 +19,7 @@ function EditTaskModal({ task, onClose, onSave, onDelete, apiCall }) {
     estimatedMinutes: '',
     priority: 'medium',
     dueDate: '',
+    recurringDeadline: '',
     reminderOffsetMinutes: '',
   });
   const [labels, setLabels] = useState([]);
@@ -44,6 +45,7 @@ function EditTaskModal({ task, onClose, onSave, onDelete, apiCall }) {
         estimatedMinutes: task.estimated_minutes || '',
         priority: task.priority || 'medium',
         dueDate: task.due_date ? task.due_date.split('T')[0] : '',
+        recurringDeadline: task.recurring_deadline || '',
         reminderOffsetMinutes: task.reminder_offset_minutes != null ? String(task.reminder_offset_minutes) : '',
       });
       // Seed labels from task data (labels come back as array from the API)
@@ -221,6 +223,18 @@ function EditTaskModal({ task, onClose, onSave, onDelete, apiCall }) {
               value={formData.dueDate}
               onChange={update('dueDate')}
             />
+          </div>
+
+          <div className="form-group">
+            <label>Due by (recurring deadline, optional)</label>
+            <input
+              type="time"
+              value={formData.recurringDeadline}
+              onChange={update('recurringDeadline')}
+            />
+            <small style={{ color: 'var(--text-secondary)' }}>
+              Time of day this task should be done by, every day it recurs.
+            </small>
           </div>
 
           <div className="form-group">

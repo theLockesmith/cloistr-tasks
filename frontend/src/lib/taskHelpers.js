@@ -33,6 +33,30 @@ export function formatDueDate(rawDate) {
 }
 
 /**
+ * Determine whether a recurring task's time-of-day deadline has passed for
+ * today and the task instance is not yet completed.
+ *
+ * recurring_deadline is a "HH:MM" (24h) string that applies every day the
+ * template is active — distinct from due_date, which is a one-time calendar
+ * date. A task is overdue-by-deadline only for the current day; there is no
+ * "N days overdue" concept the way there is for due_date.
+ *
+ * @param {string|null|undefined} recurringDeadline - "HH:MM" or falsy
+ * @param {string|null|undefined} completedAt - ISO timestamp or falsy
+ * @param {Date} [now] - injectable for testing
+ * @returns {boolean}
+ */
+export function isDeadlinePassed(recurringDeadline, completedAt, now = new Date()) {
+  if (!recurringDeadline || completedAt) return false;
+  const match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(recurringDeadline);
+  if (!match) return false;
+  const [, hours, minutes] = match;
+  const deadline = new Date(now);
+  deadline.setHours(Number(hours), Number(minutes), 0, 0);
+  return now.getTime() > deadline.getTime();
+}
+
+/**
  * Coerce a raw `task.labels` value to an array.
  * The API always returns an array, but a missing or null field must not crash
  * the render.

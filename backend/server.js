@@ -51,6 +51,14 @@ async function logActivity(listId, cardId, actorPubkey, action, detail) {
   }
 }
 
+// recurring_deadline stores a time-of-day (HH:MM, 24h) that a recurring task
+// template should be completed by each day. Empty/undefined/null is valid
+// (no deadline); anything else must match the strict HH:MM shape.
+const TIME_HHMM_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
+function invalidDeadline(value) {
+  if (value === undefined || value === null || value === '') return false;
+  return !TIME_HHMM_RE.test(value);
+}
 const app = express();
 const port = process.env.PORT || 3000;
 
@@ -507,6 +515,7 @@ app.get('/api/lists/:listId/tasks', authenticateToken, async (req, res) => {
              tt.estimated_minutes,
              tt.priority,
              tt.due_date,
+             tt.recurring_deadline,
              tt.parent_template_id,
              tt.reminder_offset_minutes,
              COALESCE(
@@ -522,7 +531,10 @@ app.get('/api/lists/:listId/tasks', authenticateToken, async (req, res) => {
       JOIN task_templates tt ON t.template_id = tt.id
       WHERE t.list_id = $1 AND DATE(t.reset_date) = $2
         AND tt.parent_template_id IS NULL
-      ORDER BY tt.sort_order, tt.name
+      ORDER BY
+        CASE tt.priority WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 2 END,
+        tt.sort_order,
+        tt.name
     `, [listId, today]);
 
     res.json(result.rows);
@@ -757,7 +769,7 @@ app.post('/api/lists/:listId/templates', authenticateToken, async (req, res) => 
     const { listId } = req.params;
     const {
       name, description, timeSlot, estimatedMinutes, priority, dueDate,
-      parentTemplateId, reminderOffsetMinutes, labelIds,
+      recurringDeadline, parentTemplateId, reminderOffsetMinutes, labelIds,
     } = req.body;
 
     // Validate before touching the database. Cheaper, and an invalid request
@@ -767,6 +779,10 @@ app.post('/api/lists/:listId/templates', authenticateToken, async (req, res) => 
     }
     const nameErr = fieldTooLong(name, 'name', FIELD_LIMITS.name);
     if (nameErr) return res.status(400).json(nameErr);
+
+    if (invalidDeadline(recurringDeadline)) {
+      return res.status(400).json({ error: 'recurringDeadline must be a 24-hour time in HH:MM format' });
+    }
 
     // Access check: creating templates requires write access.
     const access = await listAccess(pool, listId, req.user.id);
@@ -802,10 +818,10 @@ app.post('/api/lists/:listId/templates', authenticateToken, async (req, res) => 
     const templateResult = await pool.query(`
       INSERT INTO task_templates (
         list_id, name, description, time_slot, estimated_minutes,
-        priority, due_date, parent_template_id, reminder_offset_minutes,
-        sort_order
+        priority, due_date, recurring_deadline, parent_template_id,
+        reminder_offset_minutes, sort_order
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, (
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, (
         SELECT COALESCE(MAX(sort_order), 0) + 1
         FROM task_templates
         WHERE list_id = $1
@@ -819,6 +835,7 @@ app.post('/api/lists/:listId/templates', authenticateToken, async (req, res) => 
       toIntOrNull(estimatedMinutes),
       priority || 'medium',
       emptyToNull(dueDate),
+      emptyToNull(recurringDeadline),
       toIntOrNull(parentTemplateId),
       toIntOrNull(reminderOffsetMinutes),
     ]);
@@ -871,12 +888,16 @@ app.put('/api/templates/:templateId', authenticateToken, async (req, res) => {
     const { templateId } = req.params;
     const {
       name, description, timeSlot, estimatedMinutes, priority, dueDate,
-      sort_order, reminderOffsetMinutes, labelIds,
+      recurringDeadline, sort_order, reminderOffsetMinutes, labelIds,
     } = req.body;
 
     if (name !== undefined) {
       const nameErr = fieldTooLong(name, 'name', FIELD_LIMITS.name);
       if (nameErr) return res.status(400).json(nameErr);
+    }
+
+    if (recurringDeadline !== undefined && invalidDeadline(recurringDeadline)) {
+      return res.status(400).json({ error: 'recurringDeadline must be a 24-hour time in HH:MM format' });
     }
 
     const { access } = await templateAccess(pool, templateId, req.user.id);
@@ -898,6 +919,10 @@ app.put('/api/templates/:templateId', authenticateToken, async (req, res) => {
     if (estimatedMinutes !== undefined) { updates.push(`estimated_minutes = $${paramIndex++}`); values.push(estimatedMinutes); }
     if (priority !== undefined) { updates.push(`priority = $${paramIndex++}`); values.push(priority); }
     if (dueDate !== undefined) { updates.push(`due_date = $${paramIndex++}`); values.push(dueDate || null); }
+    if (recurringDeadline !== undefined) {
+      updates.push(`recurring_deadline = $${paramIndex++}`);
+      values.push(recurringDeadline || null);
+    }
     if (sort_order !== undefined) { updates.push(`sort_order = $${paramIndex++}`); values.push(sort_order); }
     if (reminderOffsetMinutes !== undefined) {
       updates.push(`reminder_offset_minutes = $${paramIndex++}`);
@@ -966,6 +991,70 @@ app.delete('/api/templates/:templateId', authenticateToken, async (req, res) => 
   } catch (error) {
     console.error('Error deleting template:', error);
     res.status(500).json({ error: 'Failed to delete template' });
+  }
+});
+
+// Reorder task templates within a list (requires write access).
+// Accepts { templateIds: [id1, id2, ...] } in the desired order and assigns
+// sort_order = 1..N accordingly. Every id must already belong to this list,
+// or the whole request is rejected (no partial reorder).
+app.put('/api/lists/:listId/templates/reorder', authenticateToken, async (req, res) => {
+  try {
+    const { listId } = req.params;
+    const { templateIds } = req.body;
+
+    if (!Array.isArray(templateIds) || templateIds.length === 0) {
+      return res.status(400).json({ error: 'templateIds must be a non-empty array' });
+    }
+
+    const access = await listAccess(pool, listId, req.user.id);
+    if (!access) {
+      return res.status(404).json({ error: 'List not found' });
+    }
+    if (!hasAccess(access, 'write')) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    const ids = templateIds.map(toIntOrNull);
+    if (ids.some((id) => id === null) || new Set(ids).size !== ids.length) {
+      return res.status(400).json({ error: 'templateIds must be an array of unique, valid template IDs' });
+    }
+
+    // Verify every id belongs to this list before mutating anything.
+    const existing = await pool.query(
+      'SELECT id FROM task_templates WHERE list_id = $1 AND id = ANY($2::int[])',
+      [listId, ids]
+    );
+    const existingIds = new Set(existing.rows.map((r) => r.id));
+    if (existingIds.size !== ids.length) {
+      return res.status(400).json({ error: 'One or more template IDs do not belong to this list' });
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      for (let i = 0; i < ids.length; i++) {
+        await client.query(
+          'UPDATE task_templates SET sort_order = $1, updated_at = NOW() WHERE id = $2 AND list_id = $3',
+          [i + 1, ids[i], listId]
+        );
+      }
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    const result = await pool.query(
+      'SELECT * FROM task_templates WHERE list_id = $1 ORDER BY sort_order',
+      [listId]
+    );
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error reordering templates:', error);
+    res.status(500).json({ error: 'Failed to reorder templates' });
   }
 });
 

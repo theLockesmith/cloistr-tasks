@@ -1,6 +1,6 @@
 import React from 'react';
 import LabelChip from './LabelChip';
-import { formatDueDate, normaliseLabels, parseSubtaskCount } from '../lib/taskHelpers';
+import { formatDueDate, normaliseLabels, parseSubtaskCount, isDeadlinePassed } from '../lib/taskHelpers';
 
 // Priority labels and their CSS class suffix (maps to .priority-badge--{level} in App.css)
 const PRIORITY_LABELS = { low: 'Low', medium: 'Medium', high: 'High' };
@@ -17,6 +17,7 @@ function TaskItem({ task, onToggle, onEdit, readOnly }) {
   const taskLabels = normaliseLabels(task.labels);
   const subtaskCount = parseSubtaskCount(task.subtask_count);
   const hasReminder = task.reminder_offset_minutes != null && (task.due_date || task.time_slot);
+  const deadlinePassed = isDeadlinePassed(task.recurring_deadline, task.completed_at);
 
   return (
     <div
@@ -78,6 +79,12 @@ function TaskItem({ task, onToggle, onEdit, readOnly }) {
               (dueInfo.soon && !dueInfo.overdue ? ' soon' : '')
             }>
               {dueInfo.label}
+            </span>
+          )}
+
+          {task.recurring_deadline && (
+            <span className={'deadline-badge' + (deadlinePassed ? ' overdue' : '')}>
+              {deadlinePassed ? 'Overdue' : 'Due by'} {task.recurring_deadline}
             </span>
           )}
 

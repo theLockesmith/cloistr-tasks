@@ -15,7 +15,7 @@
  * { environment: 'jsdom' } and installing @testing-library/react.
  */
 
-import { formatDueDate, normaliseLabels, parseSubtaskCount } from '../lib/taskHelpers';
+import { formatDueDate, normaliseLabels, parseSubtaskCount, isDeadlinePassed } from '../lib/taskHelpers';
 
 // ── formatDueDate ──────────────────────────────────────────────────────────
 
@@ -78,6 +78,47 @@ describe('formatDueDate', () => {
     // label is a locale-formatted date string like "Sep 22"
     expect(typeof r.label).toBe('string');
     expect(r.label.length).toBeGreaterThan(0);
+  });
+});
+
+// ── isDeadlinePassed ──────────────────────────────────────────────────────
+
+describe('isDeadlinePassed', () => {
+  function at(hours, minutes) {
+    const d = new Date();
+    d.setHours(hours, minutes, 0, 0);
+    return d;
+  }
+
+  test('returns false when there is no recurring_deadline', () => {
+    expect(isDeadlinePassed(null, null, at(12, 0))).toBe(false);
+    expect(isDeadlinePassed(undefined, null, at(12, 0))).toBe(false);
+    expect(isDeadlinePassed('', null, at(12, 0))).toBe(false);
+  });
+
+  test('returns false when the task is already completed, even if past deadline', () => {
+    expect(isDeadlinePassed('09:00', '2026-01-01T10:00:00Z', at(12, 0))).toBe(false);
+  });
+
+  test('returns true when now is after the deadline and task is not completed', () => {
+    expect(isDeadlinePassed('09:00', null, at(9, 1))).toBe(true);
+  });
+
+  test('returns false when now is before the deadline', () => {
+    expect(isDeadlinePassed('17:00', null, at(9, 0))).toBe(false);
+  });
+
+  test('returns false exactly at the deadline (not yet passed)', () => {
+    expect(isDeadlinePassed('12:00', null, at(12, 0))).toBe(false);
+  });
+
+  test('returns true one minute after the deadline', () => {
+    expect(isDeadlinePassed('12:00', null, at(12, 1))).toBe(true);
+  });
+
+  test('returns false for a malformed deadline string', () => {
+    expect(isDeadlinePassed('not-a-time', null, at(12, 0))).toBe(false);
+    expect(isDeadlinePassed('25:00', null, at(12, 0))).toBe(false);
   });
 });
 
