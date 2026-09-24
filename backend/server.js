@@ -24,6 +24,9 @@ dotenv.config();
 // Generous caps for the TEXT columns (8192 clears any realistic NIP-44 sealed
 // value).  Labels use 2000 to stay safely under the btree page limit on the
 // UNIQUE(user_id, name) index.
+// NIP-98 HTTP Auth. The only event kind /api/auth/verify will accept.
+const AUTH_EVENT_KIND = 27235;
+
 const FIELD_LIMITS = { name: 8192, title: 8192, label_name: 2000 };
 
 function fieldTooLong(value, field, limit) {
@@ -301,6 +304,29 @@ app.post('/api/auth/verify', async (req, res) => {
     }
 
     // Validate event structure
+    // NIP-98 HTTP Auth is kind 27235, and until now nothing checked it.
+    //
+    // verifyEvent() below folds `kind` into the hash it verifies, so the kind
+    // cannot be forged after signing -- but ANY numeric kind passes, because
+    // nothing ever compared it to a value. A signature over a kind-1 note, a
+    // kind-0 profile or a kind-4 DM carrying the right challenge in its content
+    // would have logged that key in.
+    //
+    // That matters because those events exist to be published. A note is
+    // public by design, so an attacker who can get a target to publish chosen
+    // content anywhere, or who finds an old event whose content happens to
+    // parse as the right challenge JSON, is holding a credential rather than a
+    // post. Pinning the kind keeps a login event a thing signed only for
+    // logging in.
+    //
+    // Nothing legitimate is refused: the web client and the fleet bridge both
+    // build kind 27235 and only kind 27235.
+    if (signedEvent.kind !== AUTH_EVENT_KIND) {
+      return res.status(400).json({
+        error: `Auth event must be kind ${AUTH_EVENT_KIND} (NIP-98 HTTP Auth)`,
+      });
+    }
+
     if (!signedEvent.pubkey || !signedEvent.sig || !signedEvent.content) {
       return res.status(400).json({ error: 'Invalid event structure' });
     }
@@ -2296,14 +2322,43 @@ app.post('/api/boards/:listId/cards', authenticateToken, async (req, res) => {
 
     res.status(201).json({ ...card, access });
   } catch (error) {
-    // Handle unique constraint on (external_source, external_id) for idempotency.
+    // Handle unique constraint on (list_id, external_source, external_id) for
+    // idempotency.
+    //
+    // THE LOOKUP IS SCOPED TO THIS BOARD, and that is not belt-and-braces on
+    // top of the index: it is the half that stops the leak. The previous
+    // version matched on (external_source, external_id) alone and returned
+    // whatever row it found, which for a client whose key is not globally
+    // unique meant handing another board's card -- title, description,
+    // assignee -- to a caller with no access to it. Same defect as the one
+    // fixed for card_comments in 65770090, reached through a different door.
+    //
+    // With the index scoped per board (migration 022) a 23505 here can only
+    // mean "this board already has a card with this key", so the scoped lookup
+    // always finds it. The guard below exists anyway, because the alternative
+    // to it is reading a property off undefined and answering 500.
     if (error.code === '23505' && error.constraint === 'idx_board_cards_external') {
       const existing = await pool.query(
-        'SELECT * FROM board_cards WHERE external_source = $1 AND external_id = $2',
-        [req.body.externalSource, req.body.externalId],
+        `SELECT * FROM board_cards
+          WHERE list_id = $1 AND external_source = $2 AND external_id = $3`,
+        [req.params.listId, req.body.externalSource, req.body.externalId],
       );
-      // Re-resolve access for the idempotent response.
       const dup = existing.rows[0];
+      if (!dup) {
+        // The index fired but this board has no such card, which means the
+        // index and this query disagree. Say so rather than crashing on
+        // undefined; a 500 with no explanation is how the last one hid.
+        console.error('card dedup: index fired but no row on this board', {
+          listId: req.params.listId, externalSource: req.body.externalSource,
+        });
+        return res.status(409).json({ error: 'Card with this external id already exists' });
+      }
+      // Access is re-resolved rather than reused: the `access` from the try
+      // block is scoped to it and is NOT visible here. Using it throws a
+      // ReferenceError inside an async catch that has not answered yet, which
+      // does not surface as a 500 -- the request simply never gets a response
+      // and the caller waits until it gives up. Measured: two tests that
+      // should have failed in milliseconds timed out at thirty seconds.
       const dupAccess = await listAccess(pool, dup.list_id, req.user.id);
       return res.status(200).json({ ...dup, access: dupAccess });
     }
