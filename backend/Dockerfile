@@ -1,4 +1,4 @@
-FROM node:22.23.2-alpine
+FROM node:22.23.3-alpine
 
 LABEL maintainer="cloistr" \
       version="1.0.0" \
