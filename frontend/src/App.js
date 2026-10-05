@@ -4,6 +4,7 @@ import '@cloistr/ui/styles';
 import { AuthProvider, useAuth } from './components/AuthContext';
 import { useRelayReconnect } from './lib/useRelayReconnect';
 import { resolveAuthView } from './lib/authGate';
+import { serviceConfig } from './lib/serviceConfig';
 import LoginScreen from './components/LoginScreen';
 import AuthenticatedApp from './components/AuthenticatedApp';
 import './App.css';
@@ -119,7 +120,7 @@ function AppContent() {
 function App() {
   return (
     <ToastProvider>
-      <SharedAuthProvider>
+      <SharedAuthProvider signerUrl={serviceConfig.signerUrl}>
         <RelayReconnectMount />
         <AuthProvider>
           <AppContent />

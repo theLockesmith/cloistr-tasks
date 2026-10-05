@@ -34,8 +34,19 @@ RUN rm -f /etc/nginx/conf.d/default.conf && \
 ENV NGINX_ENTRYPOINT_LOCAL_RESOLVERS=1
 # Mandatory. envsubst would otherwise blank out nginx's OWN runtime variables
 # ($host, $remote_addr, $scheme, ...) because they look like shell variables.
-ENV NGINX_ENVSUBST_FILTER="NGINX_LOCAL_RESOLVERS|TASKS_BACKEND_HOST"
+ENV NGINX_ENVSUBST_FILTER="NGINX_LOCAL_RESOLVERS|TASKS_BACKEND_HOST|^CLOISTR_"
 ENV TASKS_BACKEND_HOST="cloistr-tasks-backend.cloistr.svc.cluster.local"
+
+# Runtime service config served at /config.js (see default.conf.template).
+# Production values as the defaults is what keeps production unchanged: a
+# deployment that sets nothing resolves to production. Staging overrides these
+# at deploy time; nothing else differs between the two.
+ENV CLOISTR_RELAY_URL=wss://relay.cloistr.xyz \
+    CLOISTR_SIGNER_URL=https://signer.cloistr.xyz \
+    CLOISTR_BLOSSOM_URL=https://files.cloistr.xyz \
+    CLOISTR_DISCOVERY_URL=https://discover.cloistr.xyz \
+    CLOISTR_APP_URL=https://tasks.cloistr.xyz \
+    CLOISTR_ENVIRONMENT=production
 
 USER nginx
 

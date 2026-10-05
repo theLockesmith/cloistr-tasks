@@ -75,6 +75,10 @@
       index.html → the browser tried to parse HTML as a SW script and failed
       installation. Registration removed until a real offline strategy exists.
     -->
+    <!-- Runtime service config, written by the container at startup (see
+         default.conf.template). A classic script, not a fetch, so it has run
+         before the bundle imports anything. 404s harmlessly in vite dev. -->
+    <script src="/config.js"></script>
     <script type="module" src="/src/index.js"></script>
   </body>
 </html>

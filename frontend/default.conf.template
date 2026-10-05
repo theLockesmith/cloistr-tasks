@@ -35,6 +35,20 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
+    # Runtime service config for the shared reader in @cloistr/collab-common
+    # (window.__CLOISTR_CONFIG__). The CLOISTR_* values are substituted at
+    # container start, so one image serves production and staging.
+    #
+    # Exact match ("location =") so no current or future regex location for
+    # static assets can outrank it and hand it a long cache; no-store so no
+    # browser or edge cache serves one environment's config to the other.
+    location = /config.js {
+        access_log off;
+        default_type application/javascript;
+        add_header Cache-Control "no-store" always;
+        return 200 'window.__CLOISTR_CONFIG__={"relayUrl":"${CLOISTR_RELAY_URL}","blossomUrl":"${CLOISTR_BLOSSOM_URL}","discoveryUrl":"${CLOISTR_DISCOVERY_URL}","signerUrl":"${CLOISTR_SIGNER_URL}","appUrl":"${CLOISTR_APP_URL}","environment":"${CLOISTR_ENVIRONMENT}"};';
+    }
+
     location / {
         root /usr/share/nginx/html;
         index index.html;

@@ -2,8 +2,9 @@ import React, { useEffect, useRef } from 'react';
 import { Header, LoginModal } from '@cloistr/ui/components';
 import { useNostrAuth } from '@cloistr/auth';
 import { useAuth } from './AuthContext';
+import { serviceConfig } from '../lib/serviceConfig';
 
-const SIGNER_URL = 'https://signer.cloistr.xyz';
+const SIGNER_URL = serviceConfig.signerUrl;
 
 function LoginScreen() {
   const { authState } = useNostrAuth();

@@ -10,6 +10,7 @@ import LabelManager from './LabelManager';
 import BoardView from './BoardView';
 import { isSharedList, shareLabel, canWriteList } from '../lib/accessHelpers';
 import { registerServiceWorkerIfGranted } from '../lib/push';
+import { serviceConfig } from '../lib/serviceConfig';
 
 function AuthenticatedApp() {
   const { user, logout, apiCall, formatPubkey } = useAuth();
@@ -239,6 +240,7 @@ function AuthenticatedApp() {
       <Header
         activeServiceId="tasks"
         auth={{ authenticated: true, pubkey: user?.pubkey, onLogout: logout }}
+        signerUrl={serviceConfig.signerUrl}
       />
 
       <div className="main-content">
