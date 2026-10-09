@@ -1,9 +1,19 @@
 /**
  * Cross-subdomain session management for Cloistr
  *
- * Uses cookies on .cloistr.xyz domain to share auth state across all services.
- * This allows single sign-on: login once on any service, authenticated everywhere.
+ * Uses cookies on the environment's parent domain (.cloistr.xyz in production)
+ * to share auth state across all services. This allows single sign-on: login
+ * once on any service, authenticated everywhere.
+ *
+ * Sessions must not cross environments (staging-environment.md, rule 4).
+ * Staging hosts sit inside .cloistr.xyz, so scoping alone is not enough: the
+ * browser still sends production's .cloistr.xyz cookies to a staging host. So
+ * outside production the cookies are BOTH scoped to the staging parent domain
+ * AND named per environment, and staging never reads production's names.
+ * Production keeps the original domain and names.
  */
+
+import { serviceConfig } from './serviceConfig';
 
 /**
  * Session TTL options in seconds
@@ -24,11 +34,20 @@ export const SESSION_TTL_LABELS = {
 
 const DEFAULT_TTL = '30d';
 
+/**
+ * Cookie name prefix for this environment: 'cloistr_' in production (the
+ * original names), 'cloistr_<env>_' anywhere else.
+ */
+function cookiePrefix() {
+  const env = String(serviceConfig.environment || 'production').toLowerCase().replace(/[^a-z0-9]/g, '');
+  return env === 'production' || env === '' ? 'cloistr_' : `cloistr_${env}_`;
+}
+
 const COOKIE_KEYS = {
-  METHOD: 'cloistr_auth_method',
-  PUBKEY: 'cloistr_auth_pubkey',
-  BUNKER: 'cloistr_auth_bunker',
-  TTL: 'cloistr_session_ttl',
+  METHOD: `${cookiePrefix()}auth_method`,
+  PUBKEY: `${cookiePrefix()}auth_pubkey`,
+  BUNKER: `${cookiePrefix()}auth_bunker`,
+  TTL: `${cookiePrefix()}session_ttl`,
 };
 
 /**
@@ -38,6 +57,36 @@ export function isCloistrDomain() {
   if (typeof window === 'undefined') return false;
   return window.location.hostname.endsWith('cloistr.xyz') ||
          window.location.hostname === 'cloistr.xyz';
+}
+
+/**
+ * The domain to scope session cookies to, or null for a host-only cookie.
+ *
+ * With a runtime appUrl (every deployed image), it is the app host's parent:
+ * tasks.cloistr.xyz -> .cloistr.xyz, tasks.staging.cloistr.xyz ->
+ * .staging.cloistr.xyz. Only applied when the page is actually served under
+ * that parent; a mismatch (e.g. a staging image opened on localhost) falls
+ * back to host-only rather than guessing. Without an appUrl (vite dev) the
+ * original .cloistr.xyz rule applies.
+ */
+export function getCookieDomain() {
+  if (typeof window === 'undefined') return null;
+  const host = window.location.hostname;
+
+  if (serviceConfig.appUrl) {
+    try {
+      const labels = new URL(serviceConfig.appUrl).hostname.split('.');
+      if (labels.length > 2) {
+        const parent = labels.slice(1).join('.');
+        if (host === parent || host.endsWith(`.${parent}`)) return `.${parent}`;
+      }
+    } catch {
+      // A malformed appUrl is already reported by the config reader.
+    }
+    return null;
+  }
+
+  return isCloistrDomain() ? '.cloistr.xyz' : null;
 }
 
 /**
@@ -66,8 +115,9 @@ export function getSessionTTL() {
 function buildCookieWithMaxAge(name, value, maxAge) {
   const parts = [`${name}=${encodeURIComponent(value)}`];
 
-  if (isCloistrDomain()) {
-    parts.push('domain=.cloistr.xyz');
+  const domain = getCookieDomain();
+  if (domain) {
+    parts.push(`domain=${domain}`);
   }
 
   parts.push('path=/');
@@ -146,8 +196,9 @@ export function clearSharedSession() {
   if (typeof document === 'undefined') return;
 
   const deleteCookie = (name) => {
-    if (isCloistrDomain()) {
-      document.cookie = `${name}=; domain=.cloistr.xyz; path=/; max-age=0`;
+    const domain = getCookieDomain();
+    if (domain) {
+      document.cookie = `${name}=; domain=${domain}; path=/; max-age=0`;
     }
     document.cookie = `${name}=; path=/; max-age=0`;
   };
