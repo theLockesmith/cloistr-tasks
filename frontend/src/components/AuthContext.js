@@ -1,7 +1,14 @@
 // src/components/AuthContext.js - Nostr Authentication Context
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { useNostrAuth } from '@cloistr/auth';
-import { withSignerRetry } from '@cloistr/ui';
+// Session cookies come from @cloistr/ui, the one implementation every app
+// shares: environment-scoped names and domain from the runtime config.
+import {
+  withSignerRetry,
+  saveSharedSession,
+  clearSharedSession,
+  renewSession,
+} from '@cloistr/ui';
 import {
   hasNostrExtension,
   waitForNostrExtension,
@@ -10,11 +17,6 @@ import {
   createAuthEvent,
   formatPubkey
 } from '../lib/nostr';
-import {
-  saveSharedSession,
-  clearSharedSession,
-  renewSession,
-} from '../lib/session';
 
 const AuthContext = createContext(null);
 
