@@ -2177,6 +2177,39 @@ app.get('/api/boards/:listId', authenticateToken, async (req, res) => {
   }
 });
 
+// Resolve a card id to the board that holds it, for the /card/:id deep link.
+//
+// A card that does not exist and a card on a board the caller cannot see get
+// the SAME 404, so the link cannot be used to probe which card ids exist on
+// other people's boards. Inactive (deleted) boards count as not found, since
+// /api/lists hides them and the frontend could not open them anyway.
+app.get('/api/cards/:cardId', authenticateToken, async (req, res) => {
+  try {
+    const { cardId } = req.params;
+    // board_cards.id is a 32-bit SERIAL; anything else would be a pg error.
+    if (!/^\d{1,10}$/.test(cardId) || Number(cardId) > 2147483647) {
+      return res.status(404).json({ error: 'Card not found' });
+    }
+
+    const { listId, columnId, access } = await cardAccess(pool, cardId, req.user.id);
+    if (!access) {
+      return res.status(404).json({ error: 'Card not found' });
+    }
+
+    const list = await pool.query(
+      `SELECT active FROM task_lists WHERE id = $1`, [listId]
+    );
+    if (!list.rows[0] || list.rows[0].active === false) {
+      return res.status(404).json({ error: 'Card not found' });
+    }
+
+    res.json({ id: Number(cardId), list_id: listId, column_id: columnId, access });
+  } catch (error) {
+    console.error('Error resolving card:', error);
+    res.status(500).json({ error: 'Failed to resolve card' });
+  }
+});
+
 // ── Board columns (owner-only CUD) ─────────────────────────────────────
 
 app.post('/api/boards/:listId/columns', authenticateToken, async (req, res) => {

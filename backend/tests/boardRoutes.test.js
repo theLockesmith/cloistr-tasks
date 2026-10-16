@@ -869,3 +869,33 @@ describe('checklist DELETE scopes to card', () => {
     expect(body).toMatch(/DELETE\s+FROM\s+card_checklist_items\s+WHERE\s+id\s*=.*AND\s+card_id\s*=/s);
   });
 });
+
+// ── Card deep-link resolver (/card/<id>) ─────────────────────────────────────
+
+describe('GET /api/cards/:cardId', () => {
+  const body = extractRouteBody(serverSrc, 'get', '/api/cards/:cardId');
+
+  test('is registered behind authenticateToken', () => {
+    expect(body).not.toBeNull();
+  });
+
+  test('resolves access through cardAccess', () => {
+    expect(body).toContain('cardAccess(pool, cardId, req.user.id)');
+  });
+
+  test('refuses non-numeric and out-of-range ids before querying', () => {
+    const guard = body.indexOf('2147483647');
+    expect(guard).toBeGreaterThan(-1);
+    expect(guard).toBeLessThan(body.indexOf('cardAccess('));
+  });
+
+  test('missing card and unreadable card get the same 404', () => {
+    const notFound = body.match(/status\(404\)\.json\(\{ error: 'Card not found' \}\)/g) || [];
+    expect(notFound.length).toBe(3);
+    expect(body).not.toMatch(/status\(403\)/);
+  });
+
+  test('ADMISSION: a readable card returns its board id', () => {
+    expect(body).toContain('list_id: listId');
+  });
+});

@@ -11,6 +11,7 @@ import BoardView from './BoardView';
 import { isSharedList, shareLabel, canWriteList } from '../lib/accessHelpers';
 import { registerServiceWorkerIfGranted } from '../lib/push';
 import { serviceConfig } from '../lib/serviceConfig';
+import { parseCardPath, showCardInAddressBar } from '../lib/cardLink';
 
 function AuthenticatedApp() {
   const { user, logout, apiCall, formatPubkey } = useAuth();
@@ -21,6 +22,10 @@ function AuthenticatedApp() {
   const [showAddTask, setShowAddTask] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showLabelManager, setShowLabelManager] = useState(false);
+  // Deep link: the card BoardView should open once its board has loaded, and
+  // the message shown when a /card/<id> link cannot be opened.
+  const [linkedCardId, setLinkedCardId] = useState(null);
+  const [cardLinkError, setCardLinkError] = useState(null);
   
   const [userSettings, setUserSettings] = useState({
     previewTaskCount: 5,
@@ -44,7 +49,7 @@ function AuthenticatedApp() {
     setSelectedList(null);
     setTaskPreviews({});
     setLoading(true);
-    loadLists();
+    loadLists().then(openLinkedCard);
     loadUserSettings();
   }, [user?.pubkey]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -100,12 +105,47 @@ function AuthenticatedApp() {
         const data = await response.json();
         setLists(data);
         data.forEach(list => loadTaskPreview(list.id));
+        return data;
       }
     } catch (error) {
       console.error('Error loading lists:', error);
     } finally {
       setLoading(false);
     }
+    return null;
+  };
+
+  // A cold load of /card/<id> (including one that went through sign-in
+  // first, since the login screen leaves the path alone) opens the board that
+  // holds the card, and BoardView then opens the card itself. A card that does
+  // not exist and one on a board this identity cannot see get the same
+  // message: the backend deliberately does not tell them apart.
+  const openLinkedCard = async (loadedLists) => {
+    const cardId = parseCardPath(window.location.pathname);
+    if (!cardId) return;
+    setCardLinkError(null);
+    const notFound = 'Card #' + cardId + " doesn't exist, or this account can't see it.";
+    const retry = 'Card #' + cardId + ' could not be opened. Try again in a moment.';
+    // Lists failed to load: the card may well exist, so do not call it missing.
+    if (!loadedLists) {
+      setCardLinkError(retry);
+      return;
+    }
+    try {
+      const response = await apiCall('/cards/' + cardId);
+      const listId = response.ok ? (await response.json()).list_id : null;
+      const board = listId ? loadedLists.find(l => l.id === listId) : null;
+      if (board) {
+        setLinkedCardId(cardId);
+        setSelectedList(board);
+        return;
+      }
+      setCardLinkError(response.ok || response.status === 404 ? notFound : retry);
+    } catch (error) {
+      console.error('Error opening linked card:', error);
+      setCardLinkError(retry);
+    }
+    showCardInAddressBar(null);
   };
 
   const loadUserSettings = async () => {
@@ -244,6 +284,15 @@ function AuthenticatedApp() {
       />
 
       <div className="main-content">
+        {cardLinkError && (
+          <div className="card-link-error" role="alert">
+            <span>{cardLinkError}</span>
+            <button type="button" className="btn btn-secondary btn-small" onClick={() => setCardLinkError(null)}>
+              Dismiss
+            </button>
+          </div>
+        )}
+
         <div className="page-header">
           <h1>Daily Task Manager</h1>
           <p className="date">{getCurrentDate()}</p>
@@ -458,9 +507,14 @@ function AuthenticatedApp() {
       {selectedList && selectedList.list_type === 'board' ? (
         <BoardView
           list={selectedList}
-          onClose={() => setSelectedList(null)}
+          onClose={() => { setSelectedList(null); setLinkedCardId(null); }}
           apiCall={apiCall}
           user={user}
+          initialCardId={linkedCardId}
+          onInitialCardMissing={() => {
+            setCardLinkError('Card #' + linkedCardId + " doesn't exist, or this account can't see it.");
+            setLinkedCardId(null);
+          }}
         />
       ) : selectedList && (
         <TaskListModal

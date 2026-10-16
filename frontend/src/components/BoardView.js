@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import ReactDOM from 'react-dom';
 import BoardCardModal from './BoardCardModal';
 import { useCardContextMenu, CardContextMenu } from './CardContextMenu';
@@ -6,8 +6,9 @@ import DragDropList from './DragDropList';
 import EditListModal from './EditListModal';
 import { isListOwner, canAdminList, canWriteList } from '../lib/accessHelpers';
 import { formatPubkey } from '../lib/pubkeyDisplay';
+import { cardUrl, copyText, showCardInAddressBar } from '../lib/cardLink';
 
-function BoardView({ list, onClose, apiCall, user }) {
+function BoardView({ list, onClose, apiCall, user, initialCardId, onInitialCardMissing }) {
   const [columns, setColumns] = useState([]);
   const [access, setAccess] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -96,6 +97,35 @@ function BoardView({ list, onClose, apiCall, user }) {
   useEffect(() => {
     loadBoard();
   }, [loadBoard]);
+
+  // Deep link (/card/<id>): once the board has loaded, open the linked card.
+  // Handled once per board mount, so a later reload of the board after an
+  // edit does not reopen a card the user has since closed.
+  const initialCardHandled = useRef(!initialCardId);
+  useEffect(() => {
+    if (initialCardHandled.current || loading) return;
+    initialCardHandled.current = true;
+    const column = columns.find(c => (c.cards || []).some(card => card.id === initialCardId));
+    const card = column && column.cards.find(c => c.id === initialCardId);
+    if (card) {
+      setSelectedCard({ ...card, _columnName: column.name });
+    } else if (onInitialCardMissing) {
+      onInitialCardMissing();
+    }
+  }, [loading, columns, initialCardId, onInitialCardMissing]);
+
+  // Keep the address bar on /card/<id> while a card is open, so it can be
+  // copied straight from there; back to / when it closes. Skipped until a
+  // pending deep link has been handled, so the link is not erased early.
+  useEffect(() => {
+    if (!initialCardHandled.current) return;
+    showCardInAddressBar(selectedCard ? selectedCard.id : null);
+  }, [selectedCard]);
+
+  // Closing the board with a card still open (one Escape reaches both this
+  // view's and the app's key handlers) unmounts before the effect above can
+  // run, so reset the address bar on the way out too.
+  useEffect(() => () => showCardInAddressBar(null), []);
 
   const loadActivity = useCallback(async () => {
     setActivityLoading(true);
@@ -796,6 +826,11 @@ function BoardView({ list, onClose, apiCall, user }) {
               key: 'open',
               label: 'Open card',
               onClick: () => setSelectedCard({ ...contextCard, _columnName: columns.find(c => c.id === contextCard._columnId)?.name }),
+            },
+            {
+              key: 'copy-link',
+              label: 'Copy link',
+              onClick: () => copyText(cardUrl(contextCard.id)),
             },
             ...(canAdmin ? [
               { key: 'sep-2', separator: true },

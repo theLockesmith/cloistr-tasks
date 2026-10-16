@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import renderMarkdown from '../lib/renderMarkdown';
+import { cardUrl, copyText } from '../lib/cardLink';
 
 function BoardCardModal({ card, columns, listId, access, boardTags, apiCall, user, onClose, onCardUpdated }) {
   const [title, setTitle] = useState(card.title);
@@ -21,6 +22,12 @@ function BoardCardModal({ card, columns, listId, access, boardTags, apiCall, use
   const [newTagColor, setNewTagColor] = useState('#6b7280');
   const [checklistItems, setChecklistItems] = useState([]);
   const [newChecklistText, setNewChecklistText] = useState('');
+  const [linkCopied, setLinkCopied] = useState(null);
+
+  const handleCopyLink = async () => {
+    setLinkCopied(await copyText(cardUrl(card.id)) ? 'copied' : 'failed');
+    setTimeout(() => setLinkCopied(null), 2000);
+  };
 
   const canWrite = access === 'owner' || access === 'admin' || access === 'write';
   const canAdmin = access === 'owner' || access === 'admin';
@@ -297,6 +304,15 @@ function BoardCardModal({ card, columns, listId, access, boardTags, apiCall, use
           <span className="board-card-column-badge">
             {currentColumn ? currentColumn.name : 'Unknown'}
           </span>
+          <span className="board-card-number">#{card.id}</span>
+          <button
+            type="button"
+            className="btn btn-secondary btn-small board-card-copy-link"
+            onClick={handleCopyLink}
+            title={cardUrl(card.id)}
+          >
+            {linkCopied === 'copied' ? 'Copied' : linkCopied === 'failed' ? 'Copy failed' : 'Copy link'}
+          </button>
         </div>
 
         {/* Fields */}
