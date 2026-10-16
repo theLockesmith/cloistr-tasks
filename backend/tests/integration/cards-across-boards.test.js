@@ -204,6 +204,18 @@ describe('GET /api/cards with NIP-98', () => {
     expect(res.status).toBe(401);
   });
 
+  test('used event ids are pruned once they are past the window', async () => {
+    await pool.query(
+      `INSERT INTO nip98_seen_events (event_id, expires_at) VALUES ($1, NOW() - INTERVAL '1 second')`,
+      ['e'.repeat(64)]);
+    const res = await request.get('/api/cards?assignee=me').set('Authorization', nip98(URL, { ageSeconds: 9 }));
+    expect(res.status).toBe(200);
+    const left = await pool.query(`SELECT event_id FROM nip98_seen_events WHERE expires_at < NOW()`);
+    expect(left.rowCount).toBe(0);
+    const stale = await pool.query(`SELECT 1 FROM nip98_seen_events WHERE event_id = $1`, ['e'.repeat(64)]);
+    expect(stale.rowCount).toBe(0);
+  });
+
   test('NIP-98 is not accepted on any other endpoint', async () => {
     const res = await request.get('/api/lists')
       .set('Authorization', nip98('https://tasks.test/api/lists'));
