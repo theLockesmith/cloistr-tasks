@@ -9,8 +9,9 @@ import promClient from 'prom-client';
 import webpush from 'web-push';
 
 import { initializeDatabase, createPool, createAppPool } from './database/init.js';
-import { emptyToNull, toIntOrNull } from './utils.js';
+import { emptyToNull, toIntOrNull, isDoneColumnName } from './utils.js';
 import { authenticateToken, optionalAuth, issueJWT } from './middleware/auth.js';
+import { authenticateTokenOrNip98 } from './middleware/nip98.js';
 import { listAccess, hasAccess, templateAccess, taskAccess, cardAccess } from './lib/access.js';
 import { notifyBoardContributors } from './lib/notify.js';
 
@@ -734,8 +735,8 @@ app.post('/api/lists', authenticateToken, async (req, res) => {
       const defaultColumns = ['To Do', 'In Progress', 'Done'];
       for (let i = 0; i < defaultColumns.length; i++) {
         await pool.query(
-          'INSERT INTO board_columns (list_id, name, sort_order) VALUES ($1, $2, $3)',
-          [newList.id, defaultColumns[i], i + 1],
+          'INSERT INTO board_columns (list_id, name, sort_order, is_done) VALUES ($1, $2, $3, $4)',
+          [newList.id, defaultColumns[i], i + 1, isDoneColumnName(defaultColumns[i])],
         );
       }
     }
@@ -1620,7 +1621,7 @@ app.get('/api/user/export', authenticateToken, async (req, res) => {
       `, [userId]),
       // Board data: columns, cards, tags
       pool.query(`
-        SELECT bc.id, bc.list_id, bc.name, bc.color, bc.sort_order, bc.collapsed
+        SELECT bc.id, bc.list_id, bc.name, bc.color, bc.sort_order, bc.collapsed, bc.is_done
         FROM board_columns bc
         JOIN task_lists tl ON tl.id = bc.list_id
         WHERE tl.user_id = $1
@@ -1756,8 +1757,8 @@ app.post('/api/user/import', authenticateToken, async (req, res) => {
             const defaults = ['To Do', 'In Progress', 'Done'];
             for (let i = 0; i < defaults.length; i++) {
               const colRes = await client.query(
-                'INSERT INTO board_columns (list_id, name, sort_order) VALUES ($1, $2, $3) RETURNING id',
-                [listIdMap[list.id], defaults[i], i + 1],
+                'INSERT INTO board_columns (list_id, name, sort_order, is_done) VALUES ($1, $2, $3, $4) RETURNING id',
+                [listIdMap[list.id], defaults[i], i + 1, isDoneColumnName(defaults[i])],
               );
               columnIdMap[`default-${list.id}-${i}`] = colRes.rows[0].id;
             }
@@ -1770,8 +1771,9 @@ app.post('/api/user/import', authenticateToken, async (req, res) => {
         const newListId = listIdMap[col.list_id];
         if (!newListId) continue;
         const result = await client.query(
-          'INSERT INTO board_columns (list_id, name, color, sort_order, collapsed) VALUES ($1, $2, $3, $4, $5) RETURNING id',
-          [newListId, col.name, col.color, col.sort_order, col.collapsed || false],
+          'INSERT INTO board_columns (list_id, name, color, sort_order, collapsed, is_done) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id',
+          [newListId, col.name, col.color, col.sort_order, col.collapsed || false,
+           typeof col.is_done === 'boolean' ? col.is_done : isDoneColumnName(col.name)],
         );
         columnIdMap[col.id] = result.rows[0].id;
         stats.board_columns++;
@@ -2177,6 +2179,41 @@ app.get('/api/boards/:listId', authenticateToken, async (req, res) => {
   }
 });
 
+// The caller's cards across every board they can read (Space's Activity
+// widget). Only ?assignee=me exists today. Cards in columns marked is_done are
+// left out unless ?include_done=1. This is the ONE endpoint that also accepts
+// NIP-98 (Authorization: Nostr ...), so other Cloistr apps can call it with
+// the user's signer instead of a tasks JWT. See middleware/nip98.js.
+app.get('/api/cards', authenticateTokenOrNip98(() => pool), async (req, res) => {
+  try {
+    if (req.query.assignee !== 'me') {
+      return res.status(400).json({ error: "assignee must be 'me'" });
+    }
+    const includeDone = req.query.include_done === '1' || req.query.include_done === 'true';
+
+    const result = await pool.query(`
+      SELECT bc.id, bc.title, bc.list_id,
+             tl.name  AS board_name,
+             col.name AS column_name,
+             to_char(bc.due_date, 'YYYY-MM-DD') AS due_date
+      FROM board_cards bc
+      JOIN board_columns col ON col.id = bc.column_id
+      JOIN task_lists tl     ON tl.id  = bc.list_id
+      LEFT JOIN task_list_shares tls ON tls.list_id = tl.id AND tls.pubkey = $1
+      WHERE bc.assignee_pubkey = $1
+        AND (tl.user_id = $1 OR tls.permission IS NOT NULL)
+        AND tl.active = true
+        AND ($2::boolean OR NOT col.is_done)
+      ORDER BY bc.due_date NULLS LAST, bc.id
+    `, [req.user.id, includeDone]);
+
+    res.json(result.rows.map(r => ({ ...r, url: '/card/' + r.id })));
+  } catch (error) {
+    console.error('Error listing cards:', error);
+    res.status(500).json({ error: 'Failed to list cards' });
+  }
+});
+
 // Resolve a card id to the board that holds it, for the /card/:id deep link.
 //
 // A card that does not exist and a card on a board the caller cannot see get
@@ -2230,10 +2267,10 @@ app.post('/api/boards/:listId/columns', authenticateToken, async (req, res) => {
     );
 
     const result = await pool.query(`
-      INSERT INTO board_columns (list_id, name, color, sort_order)
-      VALUES ($1, $2, $3, $4)
+      INSERT INTO board_columns (list_id, name, color, sort_order, is_done)
+      VALUES ($1, $2, $3, $4, $5)
       RETURNING *
-    `, [listId, name.trim(), emptyToNull(color), sortResult.rows[0].next]);
+    `, [listId, name.trim(), emptyToNull(color), sortResult.rows[0].next, isDoneColumnName(name)]);
 
     res.status(201).json({ ...result.rows[0], access });
   } catch (error) {
