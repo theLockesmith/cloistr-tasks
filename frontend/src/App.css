@@ -383,7 +383,7 @@ body {
 }
 
 .completion-info {
-  color: var(--primary);
+  color: var(--cloistr-primary-text);
   font-size: 0.9rem;
   font-weight: 500;
   margin-left: 1rem;
@@ -683,7 +683,7 @@ body {
   content: "✓";
   position: absolute;
   left: 0;
-  color: var(--primary);
+  color: var(--cloistr-primary-text);
   font-weight: bold;
 }
 
