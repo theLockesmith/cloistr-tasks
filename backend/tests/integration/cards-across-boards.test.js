@@ -24,6 +24,7 @@ import './setup.js';
 import { initializeDatabase, createPool } from '../../database/init.js';
 import { app, setPool } from '../../server.js';
 import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools/pure';
+import { checkNip98Event } from '../../middleware/nip98.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS = path.resolve(__dirname, '../../database/migrations');
@@ -36,14 +37,20 @@ const OTHER = 'd'.repeat(64);
 
 const bearer = (pubkey) => `Bearer ${jwt.sign({ pubkey }, process.env.JWT_SECRET, { expiresIn: '1h' })}`;
 
-function nip98(url, { method = 'GET', kind = 27235, ageSeconds = 0, sk = SK } = {}) {
-  const event = finalizeEvent({
+// The nonce makes every event unique. Without it two calls in the same second
+// give the same id, and a later test can be refused by the replay guard
+// instead of by the check it means to exercise.
+function nip98Event(url, { method = 'GET', kind = 27235, ageSeconds = 0, sk = SK } = {}) {
+  return finalizeEvent({
     kind,
     created_at: Math.floor(Date.now() / 1000) - ageSeconds,
-    tags: [['u', url], ['method', method]],
+    tags: [['u', url], ['method', method], ['nonce', Math.random().toString(36).slice(2)]],
     content: '',
   }, sk);
-  return 'Nostr ' + Buffer.from(JSON.stringify(event)).toString('base64');
+}
+
+function nip98(url, opts) {
+  return 'Nostr ' + Buffer.from(JSON.stringify(nip98Event(url, opts))).toString('base64');
 }
 
 let pool, request;
@@ -197,11 +204,23 @@ describe('GET /api/cards with NIP-98', () => {
   });
 
   test('a tampered event is refused', async () => {
-    const event = JSON.parse(Buffer.from(nip98(URL).slice(6), 'base64').toString());
+    const event = nip98Event(URL);
     event.pubkey = OTHER;
     const res = await request.get('/api/cards?assignee=me')
       .set('Authorization', 'Nostr ' + Buffer.from(JSON.stringify(event)).toString('base64'));
     expect(res.status).toBe(401);
+    // Refused by the signature check, not the replay guard: the id was never claimed.
+    const claimed = await pool.query(`SELECT 1 FROM nip98_seen_events WHERE event_id = $1`, [event.id]);
+    expect(claimed.rowCount).toBe(0);
+  });
+
+  test('the signature check itself rejects a swapped pubkey', () => {
+    // Round-trip through JSON as the middleware does: nostr-tools caches a
+    // verified flag on the object finalizeEvent returns, and a spread copy
+    // would carry it past verifyEvent.
+    const event = JSON.parse(JSON.stringify(nip98Event(URL)));
+    expect(checkNip98Event({ ...event }, { url: URL, method: 'GET' })).toBe(ME);
+    expect(checkNip98Event({ ...event, pubkey: OTHER }, { url: URL, method: 'GET' })).toBe('!bad signature');
   });
 
   test('used event ids are pruned once they are past the window', async () => {
