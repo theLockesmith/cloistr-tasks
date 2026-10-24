@@ -272,11 +272,14 @@ app.get('/api/auth/challenge', async (req, res) => {
     const nonce = crypto.randomBytes(16).toString('hex');
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
 
-    // Store challenge in database
+    // Store challenge in database. The expiry is computed by Postgres: the
+    // column is TIMESTAMP without time zone and is compared against NOW(), so
+    // a JS Date (sent in the Node process's local zone) would be off by the
+    // UTC offset on any server not running UTC.
     await pool.query(`
       INSERT INTO auth_challenges (challenge, nonce, expires_at)
-      VALUES ($1, $2, $3)
-    `, [challenge, nonce, expiresAt]);
+      VALUES ($1, $2, NOW() + INTERVAL '5 minutes')
+    `, [challenge, nonce]);
 
     // Clean up old challenges
     await pool.query(`
