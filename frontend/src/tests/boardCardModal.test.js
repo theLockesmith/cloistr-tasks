@@ -320,7 +320,7 @@ describe('expandable comments', () => {
 
 describe('escape key handling', () => {
   test('escape closes expanded comment first, then description, then editing, then modal', () => {
-    const escIdx = src.indexOf("'Escape'");
+    const escIdx = src.indexOf('useEscapeKey(');
     const escBlock = src.slice(escIdx, escIdx + 400);
     const expandedCommentIdx = escBlock.indexOf('expandedCommentId');
     const descExpandedIdx = escBlock.indexOf('descriptionExpanded');
@@ -333,8 +333,9 @@ describe('escape key handling', () => {
     expect(editingIdx).toBeLessThan(onCloseIdx);
   });
 
-  test('cleans up keydown listener on unmount', () => {
-    expect(src).toMatch(/removeEventListener\(\s*['"]keydown['"]/);
+  test('handles Escape through the shared top-layer hook, not its own listener', () => {
+    expect(src).toMatch(/useEscapeKey\(/);
+    expect(src).not.toMatch(/addEventListener\(\s*['"]keydown['"]/);
   });
 });
 

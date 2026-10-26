@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import renderMarkdown from '../lib/renderMarkdown';
 import { cardUrl, copyText } from '../lib/cardLink';
+import { useEscapeKey } from '../lib/escapeKey';
 
 function BoardCardModal({ card, columns, listId, access, boardTags, apiCall, user, onClose, onCardUpdated }) {
   const [title, setTitle] = useState(card.title);
@@ -59,18 +60,12 @@ function BoardCardModal({ card, columns, listId, access, boardTags, apiCall, use
     loadChecklist();
   }, [loadComments, loadChecklist]);
 
-  useEffect(() => {
-    const handleKeyDown = (e) => {
-      if (e.key === 'Escape') {
-        if (expandedCommentId) setExpandedCommentId(null);
-        else if (descriptionExpanded) setDescriptionExpanded(false);
-        else if (editingCommentId) { setEditingCommentId(null); setEditingCommentBody(''); }
-        else onClose();
-      }
-    };
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [onClose, editingCommentId, descriptionExpanded, expandedCommentId]);
+  useEscapeKey(() => {
+    if (expandedCommentId) setExpandedCommentId(null);
+    else if (descriptionExpanded) setDescriptionExpanded(false);
+    else if (editingCommentId) { setEditingCommentId(null); setEditingCommentBody(''); }
+    else onClose();
+  });
 
   const handleSave = async () => {
     if (!dirty) return;

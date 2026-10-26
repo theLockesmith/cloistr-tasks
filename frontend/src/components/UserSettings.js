@@ -6,6 +6,7 @@ import {
   subscribeToPush,
   unsubscribeFromPush,
 } from '../lib/push';
+import { useEscapeKey } from '../lib/escapeKey';
 
 function UserSettings({ onClose, apiCall, userSettings, setUserSettings, onSettingsUpdate }) {
   const [localSettings, setLocalSettings] = useState({
@@ -72,14 +73,7 @@ function UserSettings({ onClose, apiCall, userSettings, setUserSettings, onSetti
     })();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => {
-    const handleKeyDown = (e) => {
-      if (e.key === 'Escape') onClose();
-    };
-
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [onClose]);
+  useEscapeKey(onClose);
 
   const handleSave = async () => {
     setLoading(true);

@@ -7,6 +7,7 @@
 //   - signed in, a cold load of /card/231 opens card #231 on its board
 //   - a missing or unreadable card shows a clear message
 //   - "Copy link" copies the card URL
+//   - Escape on an open card closes only the card; the board stays open
 //
 // Not part of `npm test` (the unit suite has no browser). Run it with:
 //   npm run build && node e2e/card-deeplink.mjs
@@ -98,6 +99,11 @@ async function ctx() {
   await page.waitForTimeout(300);
   if (SHOTS) await page.screenshot({ path: path.join(SHOTS, 'a3-after-escape.png') });
   check(new URL(page.url()).pathname === '/', 'closing the card returns the address bar to / (' + page.url() + ')');
+  check(await page.locator('.board-card-modal').count() === 0, 'Escape closed the card');
+  check(await page.locator('.board-modal').isVisible(), 'the same Escape left the board open');
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(300);
+  check(await page.locator('.board-modal').count() === 0, 'a second Escape closes the board');
   await c.close();
 }
 

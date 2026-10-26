@@ -103,10 +103,11 @@ describe('theme application', () => {
 // ── Escape key priority ─────────────────────────────────────────────────
 
 describe('Escape key handler', () => {
-  const keyEffect = extractEffect(src, "e.key === 'Escape'");
+  const escIdx = src.indexOf('useEscapeKey(');
+  const keyEffect = src.slice(escIdx, src.indexOf('});', escIdx) + 3);
 
   test('closes settings first (highest priority)', () => {
-    const escapeBlock = keyEffect.slice(keyEffect.indexOf("'Escape'"));
+    const escapeBlock = keyEffect;
     const settingsIdx = escapeBlock.indexOf('showSettings');
     const addListIdx = escapeBlock.indexOf('showAddList');
     const addTaskIdx = escapeBlock.indexOf('showAddTask');
@@ -118,14 +119,9 @@ describe('Escape key handler', () => {
     expect(addTaskIdx).toBeLessThan(selectedIdx);
   });
 
-  test('depends on all four modal states', () => {
-    expect(keyEffect).toMatch(
-      /\[.*showSettings.*showAddList.*showAddTask.*selectedList.*\]/,
-    );
-  });
-
-  test('cleans up the event listener on unmount', () => {
-    expect(keyEffect).toMatch(/removeEventListener\(\s*['"]keydown['"]/);
+  test('handles Escape through the shared top-layer hook, not its own listener', () => {
+    expect(keyEffect).toMatch(/^useEscapeKey\(/);
+    expect(src).not.toMatch(/addEventListener\(\s*['"]keydown['"]/);
   });
 });
 

@@ -7,6 +7,7 @@ import EditListModal from './EditListModal';
 import { isListOwner, canAdminList, canWriteList } from '../lib/accessHelpers';
 import { formatPubkey } from '../lib/pubkeyDisplay';
 import { cardUrl, copyText, showCardInAddressBar } from '../lib/cardLink';
+import { useEscapeKey } from '../lib/escapeKey';
 
 function BoardView({ list, onClose, apiCall, user, initialCardId, onInitialCardMissing }) {
   const [columns, setColumns] = useState([]);
@@ -146,21 +147,15 @@ function BoardView({ list, onClose, apiCall, user, initialCardId, onInitialCardM
     if (showActivity) loadActivity();
   }, [showActivity, loadActivity]);
 
-  useEffect(() => {
-    const handleKeyDown = (e) => {
-      if (e.key === 'Escape') {
-        if (showActivity) setShowActivity(false);
-        else if (selectedCard) setSelectedCard(null);
-        else if (addingCardColumnId) { setAddingCardColumnId(null); setNewCardTitle(''); }
-        else if (editingColumnId) { setEditingColumnId(null); setEditingColumnName(''); }
-        else if (addingColumn) { setAddingColumn(false); setNewColumnName(''); }
-        else if (showEditBoard) setShowEditBoard(false);
-        else onClose();
-      }
-    };
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [onClose, selectedCard, addingCardColumnId, addingColumn, editingColumnId, showEditBoard, showActivity]);
+  useEscapeKey(() => {
+    if (showActivity) setShowActivity(false);
+    else if (selectedCard) setSelectedCard(null);
+    else if (addingCardColumnId) { setAddingCardColumnId(null); setNewCardTitle(''); }
+    else if (editingColumnId) { setEditingColumnId(null); setEditingColumnName(''); }
+    else if (addingColumn) { setAddingColumn(false); setNewColumnName(''); }
+    else if (showEditBoard) setShowEditBoard(false);
+    else onClose();
+  });
 
   const canWrite = access === 'owner' || access === 'admin' || access === 'write';
   const canAdmin = access === 'owner' || access === 'admin';

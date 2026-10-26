@@ -12,6 +12,7 @@ import { isSharedList, shareLabel, canWriteList } from '../lib/accessHelpers';
 import { registerServiceWorkerIfGranted } from '../lib/push';
 import { serviceConfig } from '../lib/serviceConfig';
 import { parseCardPath, showCardInAddressBar } from '../lib/cardLink';
+import { useEscapeKey } from '../lib/escapeKey';
 
 function AuthenticatedApp() {
   const { user, logout, apiCall, formatPubkey } = useAuth();
@@ -84,19 +85,12 @@ function AuthenticatedApp() {
     }
   }, [userSettings.theme]);
 
-  useEffect(() => {
-    const handleKeyDown = (e) => {
-      if (e.key === 'Escape') {
-        if (showSettings) setShowSettings(false);
-        else if (showAddList) setShowAddList(false);
-        else if (showAddTask) setShowAddTask(false);
-        else if (selectedList) setSelectedList(null);
-      }
-    };
-
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [showSettings, showAddList, showAddTask, selectedList]);
+  useEscapeKey(() => {
+    if (showSettings) setShowSettings(false);
+    else if (showAddList) setShowAddList(false);
+    else if (showAddTask) setShowAddTask(false);
+    else if (selectedList) setSelectedList(null);
+  });
 
   const loadLists = async () => {
     try {

@@ -181,14 +181,14 @@ describe('card detail modal', () => {
 // ── Escape key handling ─────────────────────────────────────────────────
 
 describe('escape key handling', () => {
-  test('registers keydown listener for Escape', () => {
-    expect(src).toMatch(/addEventListener\(\s*['"]keydown['"]/);
-    expect(src).toMatch(/removeEventListener\(\s*['"]keydown['"]/);
+  test('handles Escape through the shared top-layer hook, not its own listener', () => {
+    expect(src).toMatch(/useEscapeKey\(/);
+    expect(src).not.toMatch(/addEventListener\(\s*['"]keydown['"]/);
   });
 
   test('escape priority: card modal > add card > add column > close board', () => {
     // Find the escape handler block
-    const escIdx = src.indexOf("'Escape'");
+    const escIdx = src.indexOf('useEscapeKey(');
     const escBlock = src.slice(escIdx, escIdx + 500);
     const selectedCardIdx = escBlock.indexOf('selectedCard');
     const addingCardIdx = escBlock.indexOf('addingCardColumnId');
@@ -441,7 +441,7 @@ describe('activity feed panel', () => {
   });
 
   test('Escape closes the activity panel first, before other board escape handling', () => {
-    const escIdx = src.indexOf("'Escape'");
+    const escIdx = src.indexOf('useEscapeKey(');
     const escBlock = src.slice(escIdx, escIdx + 500);
     const showActivityIdx = escBlock.indexOf('showActivity');
     const selectedCardIdx = escBlock.indexOf('selectedCard');

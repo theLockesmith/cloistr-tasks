@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useCallback } from 'react';
 import ReactDOM from 'react-dom';
+import { useEscapeKey } from '../lib/escapeKey';
 
 /**
  * Lightweight card context menu, matching the @cloistr/ui ContextMenu API shape.
@@ -29,16 +30,10 @@ export function CardContextMenu({ items, anchorPoint, onClose }) {
     const handleClick = (e) => {
       if (ref.current && !ref.current.contains(e.target)) onClose();
     };
-    const handleKey = (e) => {
-      if (e.key === 'Escape') onClose();
-    };
     document.addEventListener('mousedown', handleClick, true);
-    document.addEventListener('keydown', handleKey);
-    return () => {
-      document.removeEventListener('mousedown', handleClick, true);
-      document.removeEventListener('keydown', handleKey);
-    };
+    return () => document.removeEventListener('mousedown', handleClick, true);
   }, [anchorPoint, onClose]);
+  useEscapeKey(onClose, !!anchorPoint);
 
   useEffect(() => {
     // Clamp to viewport edges.
