@@ -1019,8 +1019,12 @@ app.put('/api/templates/:templateId', authenticateToken, async (req, res) => {
 
     if (name !== undefined) { updates.push(`name = $${paramIndex++}`); values.push(name); }
     if (description !== undefined) { updates.push(`description = $${paramIndex++}`); values.push(description); }
-    if (timeSlot !== undefined) { updates.push(`time_slot = $${paramIndex++}`); values.push(timeSlot); }
-    if (estimatedMinutes !== undefined) { updates.push(`estimated_minutes = $${paramIndex++}`); values.push(estimatedMinutes); }
+    // Blank form fields arrive as "": store NULL, as the create route does.
+    if (timeSlot !== undefined) { updates.push(`time_slot = $${paramIndex++}`); values.push(emptyToNull(timeSlot)); }
+    if (estimatedMinutes !== undefined) {
+      updates.push(`estimated_minutes = $${paramIndex++}`);
+      values.push(toIntOrNull(estimatedMinutes));
+    }
     if (priority !== undefined) { updates.push(`priority = $${paramIndex++}`); values.push(priority); }
     if (dueDate !== undefined) { updates.push(`due_date = $${paramIndex++}`); values.push(dueDate || null); }
     if (recurringDeadline !== undefined) {
