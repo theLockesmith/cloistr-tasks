@@ -1,6 +1,23 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import renderMarkdown from '../lib/renderMarkdown';
 import { cardUrl, copyText } from '../lib/cardLink';
+import { commentAuthor } from '../lib/pubkeyDisplay';
+
+// The author's name comes from the key that signed in to post the comment.
+// A poster-supplied label is shown after it, marked as unverified.
+function CommentAuthor({ comment, myPubkey }) {
+  const { name, npub, label } = commentAuthor(comment, myPubkey);
+  return (
+    <span className="comment-author" title={npub}>
+      {name}
+      {label && (
+        <span className="comment-author-label" title="Name given by the poster; not verified">
+          {' '}· “{label}”
+        </span>
+      )}
+    </span>
+  );
+}
 
 function BoardCardModal({ card, columns, listId, access, boardTags, apiCall, user, onClose, onCardUpdated }) {
   const [title, setTitle] = useState(card.title);
@@ -614,9 +631,7 @@ function BoardCardModal({ card, columns, listId, access, boardTags, apiCall, use
             {comments.map(comment => (
               <div key={comment.id} className="comment-item">
                 <div className="comment-header">
-                  <span className="comment-author">
-                    {comment.author_label || truncatePubkey(comment.author_pubkey)}
-                  </span>
+                  <CommentAuthor comment={comment} myPubkey={user?.pubkey} />
                   <span className="comment-time">{formatTimestamp(comment.created_at)}</span>
                 </div>
 
@@ -733,9 +748,7 @@ function BoardCardModal({ card, columns, listId, access, boardTags, apiCall, use
               onClick={e => e.stopPropagation()}
             >
               <div className="comment-header" style={{ marginBottom: '0.5rem' }}>
-                <span className="comment-author">
-                  {c.author_label || truncatePubkey(c.author_pubkey)}
-                </span>
+                <CommentAuthor comment={c} myPubkey={user?.pubkey} />
                 <span className="comment-time">{formatTimestamp(c.created_at)}</span>
               </div>
               <div className="md-rendered" dangerouslySetInnerHTML={{ __html: renderMarkdown(c.body) }} />
