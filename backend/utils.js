@@ -55,3 +55,12 @@ export function parseReminderOffset(v) {
   if (n === null) return null;
   return n > 0 ? n : null;
 }
+
+/**
+ * Whether a column name means "done" (Done, Closed or Complete, ignoring case
+ * and surrounding space). Migration 023 applied this rule to existing columns;
+ * new columns get the same rule until the board UI has an is_done toggle.
+ */
+export function isDoneColumnName(name) {
+  return ['done', 'closed', 'complete'].includes(String(name || '').trim().toLowerCase());
+}

@@ -188,8 +188,9 @@ describe('comments section', () => {
     expect(src).toContain('comment-body');
   });
 
-  test('shows author_label if present, otherwise truncated pubkey', () => {
-    expect(src).toMatch(/comment\.author_label\s*\|\|\s*truncatePubkey/);
+  test('shows the author from the signing key, never the poster-supplied label in its place', () => {
+    expect(src).toMatch(/<CommentAuthor comment=\{comment\}/);
+    expect(src).not.toMatch(/author_label\s*\|\|/);
   });
 
   test('edit/delete buttons only for own comments', () => {
@@ -306,7 +307,7 @@ describe('expandable comments', () => {
 
   test('expanded comment shows author and timestamp', () => {
     const overlaySection = src.slice(src.lastIndexOf('board-card-desc-expanded-overlay'));
-    expect(overlaySection).toContain('comment-author');
+    expect(overlaySection).toContain('<CommentAuthor');
     expect(overlaySection).toContain('comment-time');
   });
 

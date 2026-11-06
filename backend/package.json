@@ -51,6 +51,7 @@
   "homepage": "https://github.com/yourusername/task-manager#readme",
   "jest": {
     "testEnvironment": "node",
+    "globalSetup": "./tests/global-timezone.js",
     "transform": {},
     "testTimeout": 30000,
     "forceExit": true

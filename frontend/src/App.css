@@ -2198,6 +2198,12 @@ body {
   color: var(--primary);
 }
 
+.comment-author-label {
+  font-weight: normal;
+  font-style: italic;
+  color: var(--text-secondary);
+}
+
 .comment-time {
   font-size: 0.75rem;
   color: var(--text-secondary);

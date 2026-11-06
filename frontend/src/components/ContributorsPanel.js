@@ -31,6 +31,8 @@ function ContributorsPanel({ listId, access, apiCall, user }) {
 
   const addContributor = async (e) => {
     e.preventDefault();
+    // This form sits inside EditListModal's form; don't let the submit save and close it too.
+    e.stopPropagation();
     setError(null);
     const hex = parsePubkeyInput(newPubkey);
     if (!hex) {

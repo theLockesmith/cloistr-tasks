@@ -22,3 +22,21 @@ export function parsePubkeyInput(input) {
   } catch {}
   return null;
 }
+
+/**
+ * Who wrote a comment, for display. The name shown is always derived from
+ * author_pubkey, which the server takes from the signed-in session, so it
+ * cannot be chosen by the poster. author_label is free text the poster sends
+ * (the fleet bridge names its agents with it); it is returned separately and
+ * must only ever be shown as an unverified annotation, never as the name.
+ */
+export function commentAuthor(comment, myPubkey) {
+  const pubkey = comment?.author_pubkey || '';
+  const isMe = !!pubkey && pubkey === myPubkey;
+  const label = (comment?.author_label || '').trim();
+  return {
+    name: isMe ? 'You' : (formatPubkey(pubkey, 20) || 'Unknown'),
+    npub: formatPubkey(pubkey, 1000),
+    label: label || null,
+  };
+}
