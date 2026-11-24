@@ -7,6 +7,8 @@ import { resolveAuthView } from './lib/authGate';
 import { serviceConfig } from './lib/serviceConfig';
 import LoginScreen from './components/LoginScreen';
 import AuthenticatedApp from './components/AuthenticatedApp';
+import PublicBoardView from './components/PublicBoardView';
+import { parsePublicBoardPath } from './lib/publicBoard';
 import './App.css';
 
 /**
@@ -118,6 +120,13 @@ function AppContent() {
 }
 
 function App() {
+  // A public board is readable by anyone: render it outside the auth
+  // providers so a visitor never waits on a signer or sees the login prompt.
+  const publicBoardId = parsePublicBoardPath(window.location.pathname);
+  if (publicBoardId) {
+    return <PublicBoardView boardId={publicBoardId} />;
+  }
+
   return (
     <ToastProvider>
       <SharedAuthProvider signerUrl={serviceConfig.signerUrl}>

@@ -2876,36 +2876,35 @@ app.get('/api/public/boards/:listId', optionalAuth, async (req, res) => {
     }
 
     // Unauthenticated (or no access): only serve if the board is public.
+    // The response carries only what the signed-out board page shows. No
+    // pubkeys, timestamps or sort keys: a public board publishes its content,
+    // not who works on it or when.
     const boardCheck = await pool.query(
       "SELECT id, name FROM task_lists WHERE id = $1 AND list_type = 'board' AND visibility = 'public'",
       [listId],
     );
     if (boardCheck.rows.length === 0) return res.status(404).json({ error: 'Board not found' });
 
-    const [colResult, cardResult, tagResult, cardTagResult, checklistRollup] = await Promise.all([
+    const [colResult, cardResult, cardTagResult, checklistRollup] = await Promise.all([
       pool.query(`
-        SELECT id, name, color, sort_order, collapsed
+        SELECT id, name, color
         FROM board_columns WHERE list_id = $1 ORDER BY sort_order, id
       `, [listId]),
       // Omit external_source cards from public view: they may contain
       // data the board owner imported under terms that do not extend to
       // anonymous readers.
       pool.query(`
-        SELECT id, column_id, title, description, priority, due_date,
-               author_pubkey, assignee_pubkey, sort_order,
-               created_at, updated_at
+        SELECT id, column_id, title, description, priority, due_date
         FROM board_cards
         WHERE list_id = $1 AND external_source IS NULL
         ORDER BY sort_order, id
       `, [listId]),
       pool.query(`
-        SELECT id, name, color FROM board_tags WHERE list_id = $1 ORDER BY name
-      `, [listId]),
-      pool.query(`
-        SELECT bct.card_id, bt.id AS tag_id, bt.name, bt.color
+        SELECT bct.card_id, bt.name, bt.color
         FROM board_card_tags bct
         JOIN board_tags bt ON bt.id = bct.tag_id
         WHERE bt.list_id = $1
+        ORDER BY bt.name
       `, [listId]),
       pool.query(`
         SELECT card_id, COUNT(*)::int AS total, COUNT(*) FILTER (WHERE done)::int AS done
@@ -2918,7 +2917,7 @@ app.get('/api/public/boards/:listId', optionalAuth, async (req, res) => {
     const tagsByCard = {};
     for (const row of cardTagResult.rows) {
       if (!tagsByCard[row.card_id]) tagsByCard[row.card_id] = [];
-      tagsByCard[row.card_id].push({ id: row.tag_id, name: row.name, color: row.color });
+      tagsByCard[row.card_id].push({ name: row.name, color: row.color });
     }
 
     const checklistByCard = {};
@@ -2927,15 +2926,15 @@ app.get('/api/public/boards/:listId', optionalAuth, async (req, res) => {
     }
 
     const cardsByColumn = {};
-    for (const card of cardResult.rows) {
+    for (const { column_id, ...card } of cardResult.rows) {
       card.tags = tagsByCard[card.id] || [];
       card.checklist = checklistByCard[card.id] || null;
-      if (!cardsByColumn[card.column_id]) cardsByColumn[card.column_id] = [];
-      cardsByColumn[card.column_id].push(card);
+      if (!cardsByColumn[column_id]) cardsByColumn[column_id] = [];
+      cardsByColumn[column_id].push(card);
     }
     const columns = colResult.rows.map(col => ({ ...col, cards: cardsByColumn[col.id] || [] }));
 
-    res.json({ columns, access: 'public', visibility: 'public', board: boardCheck.rows[0], tags: tagResult.rows });
+    res.json({ board: boardCheck.rows[0], columns });
   } catch (error) {
     console.error('Error fetching public board:', error);
     res.status(500).json({ error: 'Failed to fetch public board' });
