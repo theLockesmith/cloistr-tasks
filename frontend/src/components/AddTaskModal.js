@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import LabelChip from './LabelChip';
+import { useEscapeKey } from '../lib/escapeKey';
 
 const REMINDER_OPTIONS = [
   { value: '', label: 'No reminder' },
@@ -27,11 +28,7 @@ function AddTaskModal({ listId, onClose, onSave, apiCall, parentTemplateId }) {
   const [showLabelPicker, setShowLabelPicker] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    const handleKeyDown = (e) => { if (e.key === 'Escape') onClose(); };
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [onClose]);
+  useEscapeKey(onClose);
 
   useEffect(() => {
     (async () => {

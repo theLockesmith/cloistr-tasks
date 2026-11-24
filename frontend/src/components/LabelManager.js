@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import LabelChip from './LabelChip';
+import { useEscapeKey } from '../lib/escapeKey';
 
 const DEFAULT_COLORS = [
   '#6366f1', '#3b82f6', '#10b981', '#f59e0b',
@@ -16,11 +17,7 @@ function LabelManager({ apiCall, onClose }) {
   const [editName, setEditName] = useState('');
   const [editColor, setEditColor] = useState('');
 
-  useEffect(() => {
-    const handleKey = (e) => { if (e.key === 'Escape') onClose(); };
-    document.addEventListener('keydown', handleKey);
-    return () => document.removeEventListener('keydown', handleKey);
-  }, [onClose]);
+  useEscapeKey(onClose);
 
   useEffect(() => { loadLabels(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
