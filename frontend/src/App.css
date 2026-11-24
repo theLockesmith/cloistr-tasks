@@ -2633,3 +2633,73 @@ body {
 .contributor-add-form input[type="text"] {
   min-width: 0;
 }
+
+/* ── Public board page (/public/board/<id>, signed out) ─────────────── */
+
+.public-board-page {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+}
+
+.public-board-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.public-board-header h1 {
+  margin: 0;
+  font-size: 1.4rem;
+  flex: 1 1 auto;
+}
+
+.public-board-badge {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.public-board-card summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+.public-board-card summary::-webkit-details-marker {
+  display: none;
+}
+
+.public-board-card-description {
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.9rem;
+}
+
+.public-board-message {
+  max-width: 28rem;
+  margin: 15vh auto 0;
+  padding: 0 16px;
+  text-align: center;
+}
+
+@media (max-width: 640px) {
+  .public-board-header { padding: 0.75rem 16px; }
+  .public-board-page .board-container { flex-direction: column; padding: 0.75rem 16px; }
+  .public-board-page .board-column { max-width: none; width: 100%; flex: 0 0 auto; max-height: none; }
+}
+
+.public-board-link {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.public-board-link input {
+  flex: 1;
+  min-width: 0;
+  font-family: monospace;
+  font-size: 0.85rem;
+}

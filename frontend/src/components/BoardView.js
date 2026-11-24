@@ -7,6 +7,7 @@ import EditListModal from './EditListModal';
 import { isListOwner, canAdminList, canWriteList } from '../lib/accessHelpers';
 import { formatPubkey } from '../lib/pubkeyDisplay';
 import { cardUrl, copyText, showCardInAddressBar } from '../lib/cardLink';
+import { priorityColor, dueLabel } from '../lib/cardFace';
 import { useEscapeKey } from '../lib/escapeKey';
 
 function BoardView({ list, onClose, apiCall, user, initialCardId, onInitialCardMissing }) {
@@ -318,32 +319,8 @@ function BoardView({ list, onClose, apiCall, user, initialCardId, onInitialCardM
     return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
   };
 
-  const getPriorityColor = (p) => {
-    if (p <= 1) return 'var(--error)';
-    if (p <= 3) return 'var(--warning)';
-    if (p <= 5) return '#eab308';
-    return 'var(--text-secondary)';
-  };
-
-  // Due-date indicator for the card face: overdue = red, due within the
-  // next 3 days = amber, further out = subtle gray. Compares whole
-  // calendar days (local midnight to local midnight) so "diff" isn't
-  // thrown off by the time of day the check happens to run at.
-  const formatDate = (d) => {
-    if (!d) return null;
-    const [y, m, day] = d.slice(0, 10).split('-').map(Number);
-    const due = new Date(y, m - 1, day);
-    const now = new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const diff = Math.round((due - today) / (1000 * 60 * 60 * 24));
-
-    if (diff < 0) return { text: 'Overdue', color: 'var(--error)', level: 'overdue' };
-    if (diff <= 3) {
-      const text = diff === 0 ? 'Today' : diff === 1 ? 'Tomorrow' : due.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-      return { text, color: 'var(--warning)', level: 'soon' };
-    }
-    return { text: due.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }), color: 'var(--text-secondary)', level: 'later' };
-  };
+  const getPriorityColor = priorityColor;
+  const formatDate = dueLabel;
 
   // ── Render ───────────────────────────────────────────────────────────
 

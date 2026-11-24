@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import IconPicker from './IconPicker';
 import ContributorsPanel from './ContributorsPanel';
+import { publicBoardUrl } from '../lib/publicBoard';
+import { copyText } from '../lib/cardLink';
 import { isListOwner } from '../lib/accessHelpers';
 import { useEscapeKey } from '../lib/escapeKey';
 
@@ -24,6 +26,7 @@ function EditListModal({ list, onClose, onSave, onDelete, apiCall, user }) {
   });
   const [loading, setLoading] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [linkCopied, setLinkCopied] = useState(false);
 
   useEffect(() => {
     if (list) {
@@ -242,6 +245,18 @@ function EditListModal({ list, onClose, onSave, onDelete, apiCall, user }) {
                   ? 'Anyone with the link can view this board. Only contributors can edit.'
                   : 'Only you and contributors can see this board.'}
               </small>
+              {list.visibility === 'public' && formData.visibility === 'public' && (
+                <div className="public-board-link">
+                  <input type="text" readOnly value={publicBoardUrl(list.id)} onFocus={e => e.target.select()} aria-label="Public link" />
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-small"
+                    onClick={async () => setLinkCopied(await copyText(publicBoardUrl(list.id)))}
+                  >
+                    {linkCopied ? 'Copied' : 'Copy link'}
+                  </button>
+                </div>
+              )}
             </div>
           )}
 

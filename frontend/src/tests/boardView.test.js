@@ -375,27 +375,34 @@ describe('checklist rollup', () => {
 // ── Due-date indicator on card face ────────────────────────────────────
 
 describe('due-date indicator', () => {
+  // The rules live in lib/cardFace.js, shared with the public board page.
+  const cardFaceSrc = fs.readFileSync(path.resolve(__dirname, '../lib/cardFace.js'), 'utf8');
+
+  test('BoardView takes its due-date rules from the shared helper', () => {
+    expect(src).toContain('const formatDate = dueLabel;');
+  });
+
   test('renders nothing when the card has no due date', () => {
     expect(src).toMatch(/card\.due_date\s*&&\s*\(\(\)\s*=>/);
   });
 
   test('overdue cards use the error color', () => {
-    const fdIdx = src.indexOf('const formatDate');
-    const fdBody = src.slice(fdIdx, fdIdx + 900);
+    const fdIdx = cardFaceSrc.indexOf('export function dueLabel');
+    const fdBody = cardFaceSrc.slice(fdIdx, fdIdx + 900);
     expect(fdBody).toContain("'Overdue'");
     expect(fdBody).toContain("color: 'var(--error)'");
   });
 
   test('cards due within 3 days use the warning color', () => {
-    const fdIdx = src.indexOf('const formatDate');
-    const fdBody = src.slice(fdIdx, fdIdx + 900);
+    const fdIdx = cardFaceSrc.indexOf('export function dueLabel');
+    const fdBody = cardFaceSrc.slice(fdIdx, fdIdx + 900);
     expect(fdBody).toMatch(/diff\s*<=\s*3/);
     expect(fdBody).toContain("color: 'var(--warning)'");
   });
 
   test('cards due later than 3 days use the subtle secondary color', () => {
-    const fdIdx = src.indexOf('const formatDate');
-    const fdBody = src.slice(fdIdx, fdIdx + 900);
+    const fdIdx = cardFaceSrc.indexOf('export function dueLabel');
+    const fdBody = cardFaceSrc.slice(fdIdx, fdIdx + 900);
     expect(fdBody).toContain("color: 'var(--text-secondary)'");
   });
 
