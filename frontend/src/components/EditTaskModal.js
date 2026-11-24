@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import LabelChip from './LabelChip';
 import AddTaskModal from './AddTaskModal';
+import { useEscapeKey } from '../lib/escapeKey';
 
 const REMINDER_OPTIONS = [
   { value: '', label: 'No reminder' },
@@ -30,11 +31,8 @@ function EditTaskModal({ task, onClose, onSave, onDelete, apiCall }) {
   const [loading, setLoading] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
-  useEffect(() => {
-    const handleKeyDown = (e) => { if (e.key === 'Escape' && !showAddSubtask) onClose(); };
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [onClose, showAddSubtask]);
+  // While Add Subtask is open it is the top layer and handles Escape itself.
+  useEscapeKey(onClose, !showAddSubtask);
 
   useEffect(() => {
     if (task) {

@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import IconPicker from './IconPicker';
+import { useEscapeKey } from '../lib/escapeKey';
 
 const getDefaultColor = () => {
   const v = getComputedStyle(document.documentElement).getPropertyValue('--cloistr-primary').trim();
@@ -20,14 +21,7 @@ function AddListModal({ onClose, onSave, apiCall }) {
   });
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    const handleKeyDown = (e) => {
-      if (e.key === 'Escape') onClose();
-    };
-
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [onClose]);
+  useEscapeKey(onClose);
 
   const handleSubmit = async (e) => {
     e.preventDefault();

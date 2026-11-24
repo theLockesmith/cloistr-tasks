@@ -4,6 +4,7 @@ import ContributorsPanel from './ContributorsPanel';
 import { publicBoardUrl } from '../lib/publicBoard';
 import { copyText } from '../lib/cardLink';
 import { isListOwner } from '../lib/accessHelpers';
+import { useEscapeKey } from '../lib/escapeKey';
 
 const getDefaultColor = () => {
   const v = getComputedStyle(document.documentElement).getPropertyValue('--cloistr-primary').trim();
@@ -44,14 +45,7 @@ function EditListModal({ list, onClose, onSave, onDelete, apiCall, user }) {
     }
   }, [list]);
 
-  useEffect(() => {
-    const handleKeyDown = (e) => {
-      if (e.key === 'Escape') onClose();
-    };
-
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [onClose]);
+  useEscapeKey(onClose);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
